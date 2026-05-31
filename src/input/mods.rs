@@ -1,12 +1,10 @@
-use std::ops::BitOr;
-use std::fmt::{self, Debug, Formatter};
+use std::{ops::{BitOr, Not, BitOrAssign, BitAndAssign}, fmt::{self, Debug, Formatter}};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Mods(u8);
+pub struct Mods(pub(super) u8);
 
 impl Mods {
-	#[allow(dead_code)]
-	const NONE: Mods = Mods(0);
+	pub const NONE: Mods = Mods(0);
 	
 	pub const LC: Mods = Mods(0x01); // LCtrl
 	pub const LS: Mods = Mods(0x02); // LShift
@@ -45,6 +43,10 @@ impl Mods {
 	const fn or(self, other: Self) -> Self {
 		Self(self.0 | other.0)
 	}
+	
+	pub(super) fn contains(self, other: Self) -> bool {
+		self.0 & other.0 == other.0
+	}
 }
 
 impl BitOr for Mods {
@@ -52,6 +54,26 @@ impl BitOr for Mods {
 
 	fn bitor(self, rhs: Self) -> Self::Output {
 		Self(self.0 | rhs.0)
+	}
+}
+
+impl Not for Mods {
+	type Output = Self;
+
+	fn not(self) -> Self::Output {
+		Self(!self.0)
+	}
+}
+
+impl BitOrAssign for Mods {
+	fn bitor_assign(&mut self, rhs: Self) {
+		self.0 |= rhs.0;
+	}
+}
+
+impl BitAndAssign for Mods {
+	fn bitand_assign(&mut self, rhs: Self) {
+		self.0 &= rhs.0;
 	}
 }
 
