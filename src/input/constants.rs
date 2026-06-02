@@ -1,0 +1,1 @@
+pub const CALL_NEXT: usize = 0xAABBCCDD;
