@@ -1,4 +1,5 @@
 use super::{hotkey::Hotkey, mods::Mods, keys::Key, key_sender::KeySender, constants::CALL_NEXT, extensions::InputExt};
+use super::key_event::{KeyEvent, KeyEventNotifier};
 use std::{collections::{HashMap, HashSet}, ptr, sync::{mpsc, OnceLock, Mutex, MutexGuard, Arc}};
 use std::thread::{self, JoinHandle};
 use std::fmt::{self, Debug, Formatter};
@@ -11,6 +12,7 @@ use windows::Win32::UI::{
 	WindowsAndMessaging::{
 		WH_KEYBOARD_LL, WM_QUIT, LLKHF_UP, LLKHF_EXTENDED, LLKHF_INJECTED, MSG, KBDLLHOOKSTRUCT,
 		SetWindowsHookExW,GetMessageW, TranslateMessage, DispatchMessageW, CallNextHookEx, PostThreadMessageW}};
+
 
 #[derive(Debug)]
 pub struct Handler {
@@ -34,7 +36,7 @@ enum CurrHotkey {
 	Default(KeyMods),
 	Remap(KeyMods, KeyMods),
 	Unicode(KeyMods, Arc<Vec<INPUT>>),
-	Action(KeyMods, /* KeyEvent */)
+	Action(KeyMods, KeyEventNotifier)
 }
 	
 static HANDLER: OnceLock<Mutex<Handler>> = OnceLock::new();
@@ -147,8 +149,8 @@ impl Handler {
 			return match curr_h {
 				CurrHotkey::Default(entry) => Self::kb_default_repeat(*entry, key, mod_bit),
 				CurrHotkey::Remap(entry, remap) => Self::kb_remap_repeat(*entry, *remap, key, mod_bit, h),
-				CurrHotkey::Unicode(entry, inputs) => Self::kb_unicode_repeat(*entry, inputs.clone(), key, mod_bit, h),
-				CurrHotkey::Action(_) => todo!()
+				CurrHotkey::Unicode(entry, inputs) => Self::kb_unicode_repeat(*entry, Arc::clone(inputs), key, mod_bit, h),
+				CurrHotkey::Action(entry, _) => Self::kb_action_repeat(*entry, key, mod_bit)
 			};
 		}
 		
@@ -169,7 +171,7 @@ impl Handler {
 				CurrHotkey::Default(entry) => Self::kb_default_up(*entry, key, mod_bit, h),
 				CurrHotkey::Remap(entry, remap) => Self::kb_remap_up(*entry, *remap, key, mod_bit, h),
 				CurrHotkey::Unicode(entry, _) => Self::kb_unicode_up(*entry, key, mod_bit, h),
-				CurrHotkey::Action(_) => todo!()
+				CurrHotkey::Action(entry, notf) => Self::kb_action_up(*entry, notf.clone(), key, h)
 			},
 			None => false
 		}
@@ -348,7 +350,7 @@ impl Handler {
 		let inputs = Arc::new(inputs);
 		
 		h.v_mods = Mods::NONE;
-		h.curr_h = Some(CurrHotkey::Unicode(entry, inputs.clone()));
+		h.curr_h = Some(CurrHotkey::Unicode(entry, Arc::clone(&inputs)));
 		
 		if !mods_to_release.is_none() {
 			let should_mask = Self::should_mask(mods_to_release);
@@ -415,13 +417,35 @@ impl Handler {
 		Self::map_hotkey(f, KeyMods::new(h.v_mods, key), h)
 	}
 	
+	fn kb_action(entry: KeyMods, action: fn(KeyEvent), h: &mut MutexGuard<'_, Handler>) -> bool {
+		let (event, notf) = KeyEvent::new();
+		h.curr_h = Some(CurrHotkey::Action(entry, notf));
+		
+		thread::spawn(move || action(event)); // TODO: h.curr_h = None here?
+		true
+	}
+	
+	fn kb_action_up(entry: KeyMods, notf: KeyEventNotifier, key: Key, h: &mut MutexGuard<'_, Handler>) -> bool {
+		if key == entry.key {
+			notf.notify();
+			h.curr_h = None;
+			true
+		} else {
+			false
+		}
+	}
+	
+	fn kb_action_repeat(entry: KeyMods, key: Key, mod_bit: Mods) -> bool {
+		key == entry.key || entry.mods.contains(mod_bit)
+	}
+	
 	fn map_hotkey(f: fn() -> Hotkey, entry: KeyMods, h: &mut MutexGuard<'_, Handler>) -> bool {
 		match f() {
 			Hotkey::Default => Self::kb_default(entry, h),
 			Hotkey::Suppress => Self::kb_suppress(entry.key, h),
 			Hotkey::Remap(mods, key) => Self::kb_remap(entry, KeyMods::new(mods, key), h),
 			Hotkey::Unicode(str) => Self::kb_unicode(entry, str, h),
-			Hotkey::Action(_) => todo!()
+			Hotkey::Action(action) => Self::kb_action(entry, action, h)
 		}
 	}
 	
@@ -490,7 +514,7 @@ impl Debug for CurrHotkey {
 			Self::Default(entry) => f.debug_tuple("Default").field(entry).finish(),
 			Self::Remap(entry, remap) => f.debug_tuple("Remap").field(entry).field(remap).finish(),
 			Self::Unicode(entry, _) => f.debug_tuple("Unicode").field(entry).finish(), // TODO
-			Self::Action(arg0) => f.debug_tuple("Action").field(arg0).finish(), // TODO
+			Self::Action(entry, notf) => f.debug_tuple("Action").field(entry).field(notf).finish(),
 		}
 	}
 }
