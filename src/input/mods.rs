@@ -1,4 +1,4 @@
-use std::{ops::{BitOr, Not, BitOrAssign, BitAnd, BitAndAssign}, fmt::{self, Debug, Formatter}};
+use std::{ops::{BitOr, BitOrAssign, BitAnd, BitAndAssign, Not}, fmt::{self, Debug, Formatter}};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Mods(pub(super) u8);
@@ -45,7 +45,7 @@ impl Mods {
 	}
 	
 	pub(super) fn contains(self, other: Self) -> bool {
-		self.0 & other.0 == other.0
+		self.0 & other.0 != 0
 	}
 	
 	pub(super) fn count_ones(self) -> u32 {
@@ -62,14 +62,6 @@ impl BitOr for Mods {
 
 	fn bitor(self, rhs: Self) -> Self::Output {
 		Self(self.0 | rhs.0)
-	}
-}
-
-impl Not for Mods {
-	type Output = Self;
-
-	fn not(self) -> Self::Output {
-		Self(!self.0)
 	}
 }
 
@@ -90,6 +82,14 @@ impl BitAnd for Mods {
 impl BitAndAssign for Mods {
 	fn bitand_assign(&mut self, rhs: Self) {
 		self.0 &= rhs.0;
+	}
+}
+
+impl Not for Mods {
+	type Output = Self;
+
+	fn not(self) -> Self::Output {
+		Self(!self.0)
 	}
 }
 

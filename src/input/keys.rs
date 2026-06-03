@@ -46,4 +46,16 @@ impl Key {
 	// Misc
 	
 	
+	
+	// mouse keys
+	
+	pub const LBUTTON:  Key = Key(0x0200);
+	pub const RBUTTON:  Key = Key(0x0201);
+	pub const MBUTTON:  Key = Key(0x0202);
+	pub const XBUTTON1: Key = Key(0x0203);
+	pub const XBUTTON2: Key = Key(0x0204);
+	pub const WH_UP:    Key = Key(0x0205);
+	pub const WH_DOWN:  Key = Key(0x0206);
+	pub const WH_LEFT:  Key = Key(0x0207);
+	pub const WH_RIGHT: Key = Key(0x0208);
 }

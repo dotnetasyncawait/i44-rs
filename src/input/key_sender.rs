@@ -11,6 +11,16 @@ impl KeySender {
 		Self { buf: Vec::with_capacity(cap) }
 	}
 	
+	pub fn send_key_down(key: Key) {
+		let input = if helpers::is_mouse_key(key){
+			todo!()
+		} else {
+			INPUT::keybd_down(key, CALL_NEXT)
+		};
+		
+		unsafe { SendInput(&[input], size_of::<INPUT>() as i32); }
+	}
+	
 	pub fn key_down(mut self, key: Key) -> Self {
 		self.buf.push(if helpers::is_mouse_key(key) {
 			todo!()
@@ -21,9 +31,37 @@ impl KeySender {
 		self
 	}
 	
+	pub fn key_up(mut self, key: Key) -> Self {
+		self.buf.push(if helpers::is_mouse_key(key) {
+			todo!()
+		} else {
+			INPUT::keybd_up(key, CALL_NEXT)
+		});
+		
+		self
+	}
+	
+	pub fn key_up_if(self, key: Key, cond: bool) -> Self {
+		if cond { self.key_up(key) } else { self }
+	}
+	
 	pub fn mods_down(mut self, mods: Mods) -> Self {
 		if !mods.is_none() {
 			self.add_mods(mods, true, false);
+		}
+		self
+	}
+	
+	pub fn mods_down_masked(mut self, mods: Mods, to_mask: bool) -> Self {
+		if !mods.is_none() {
+			self.add_mods(mods, true, to_mask);
+		}
+		self
+	}
+	
+	pub fn mods_up(mut self, mods: Mods) -> Self {
+		if !mods.is_none() {
+			self.add_mods(mods, false, false);
 		}
 		self
 	}
@@ -62,6 +100,6 @@ impl KeySender {
 	}
 	
 	pub fn send(self) {
-		unsafe { SendInput(&self.buf, size_of::<INPUT>() as i32) };
+		unsafe { SendInput(&self.buf, size_of::<INPUT>() as i32); }
 	}
 }

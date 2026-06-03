@@ -1,13 +1,12 @@
-use super::{hotkey::Hotkey, mods::Mods, keys::Key};
+use super::{hotkey::Hotkey, mods::Mods, keys::Key, key_sender::KeySender, constants::CALL_NEXT, helpers};
 use std::{collections::{HashMap, HashSet}, ptr, sync::{mpsc, OnceLock, Mutex, MutexGuard}, thread::{self, JoinHandle}};
 use std::collections::hash_map::Entry;
 use windows::core::Owned;
 use windows::Win32::{Foundation::{LPARAM, LRESULT, WPARAM}, System::Threading::GetCurrentThreadId};
 use windows::Win32::UI::{
-	Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VK_TO_VSC_EX, VK_BROWSER_BACK, VK_LAUNCH_APP2},
+	Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VK_TO_VSC_EX, VK_BROWSER_BACK, VK_LAUNCH_APP2 },
 	WindowsAndMessaging::{
-		WH_KEYBOARD_LL, WM_QUIT, LLKHF_UP, LLKHF_EXTENDED, LLKHF_INJECTED,
-		MSG, KBDLLHOOKSTRUCT,
+		WH_KEYBOARD_LL, WM_QUIT, LLKHF_UP, LLKHF_EXTENDED, LLKHF_INJECTED, MSG, KBDLLHOOKSTRUCT,
 		SetWindowsHookExW,GetMessageW, TranslateMessage, DispatchMessageW, CallNextHookEx, PostThreadMessageW}};
 
 
@@ -90,7 +89,10 @@ impl Handler {
 		
 		let s = unsafe { ptr::read(lparam.0 as *const KBDLLHOOKSTRUCT) };
 		
-		// TODO: filter 
+		match s.dwExtraInfo {
+			CALL_NEXT => return unsafe { CallNextHookEx(None, code, wparam, lparam) },
+			_ => {}
+		};
 		
 		let mut sc = s.scanCode as u16;
 		
@@ -109,14 +111,14 @@ impl Handler {
 		
 		let pressed = !s.flags.contains(LLKHF_UP);
 		
-		if Self::kb_key(Key(sc), pressed) {
+		if Self::handle_kb(Key(sc), pressed) {
 			LRESULT(1)
 		} else {
 			unsafe { CallNextHookEx(None, code, wparam, lparam) }
 		}
 	}
 	
-	fn kb_key(key: Key, pressed: bool) -> bool {
+	fn handle_kb(key: Key, pressed: bool) -> bool {
 		let mut h = HANDLER.get().unwrap().lock().unwrap();
 		let mod_bit = Self::get_mod(key);
 		
@@ -143,7 +145,7 @@ impl Handler {
 		if let Some(curr_h) = &h.curr_h {
 			return match curr_h {
 				CurrHotkey::Default(entry) => Self::kb_default_repeat(*entry, key, mod_bit),
-				CurrHotkey::Remap(_, _) => todo!(),
+				CurrHotkey::Remap(entry, remap) => Self::kb_remap_repeat(*entry, *remap, key, mod_bit, h),
 				CurrHotkey::Unicode(_) => todo!(),
 				CurrHotkey::Action(_) => todo!()
 			};
@@ -158,7 +160,7 @@ impl Handler {
 		match f() {
 			Hotkey::Default => Self::kb_default(entry, h),
 			Hotkey::Suppress => Self::kb_suppress(key, h),
-			Hotkey::Remap(_, _) => todo!(),
+			Hotkey::Remap(mods, key) => Self::kb_remap(entry, KeyMods::new(mods, key), h),
 			Hotkey::Unicode(_) => todo!(),
 			Hotkey::Action(_) => todo!()
 		}
@@ -172,7 +174,7 @@ impl Handler {
 		match &h.curr_h {
 			Some(curr_h) => match curr_h {
 				CurrHotkey::Default(entry) => Self::kb_default_up(*entry, key, mod_bit, h),
-				CurrHotkey::Remap(_, _) => todo!(),
+				CurrHotkey::Remap(entry, remap) => Self::kb_remap_up(*entry, *remap, key, mod_bit, h),
 				CurrHotkey::Unicode(_) => todo!(),
 				CurrHotkey::Action(_) => todo!()
 			},
@@ -189,6 +191,7 @@ impl Handler {
 		if entry.key == key {
 			false
 		} else {
+			// TODO: map hotkey if there's a match
 			entry.mods.contains(mod_bit)
 		}
 	}
@@ -205,6 +208,154 @@ impl Handler {
 		true
 	}
 	
+	fn kb_remap(entry: KeyMods, remap: KeyMods, h: &mut MutexGuard<'_, Handler>) -> bool {
+		h.curr_h = Some(CurrHotkey::Remap(entry, remap));
+		
+		let remap_mod_bit = Self::get_mod(remap.key);
+		let mods_to_release = entry.mods & !(remap.mods | remap_mod_bit);
+		let mods_to_press = remap.mods & !entry.mods;
+		
+		h.v_mods = remap.mods | remap_mod_bit;
+		
+		let should_mask = Self::should_mask(mods_to_release);
+		let size = (mods_to_release | mods_to_press).count_ones() + (should_mask as u32 * 2) + 1;
+		
+		KeySender::with_capacity(size as usize)
+			.mods_up_masked(mods_to_release, should_mask)
+			.mods_down(mods_to_press)
+			.key_down(remap.key)
+			.send();
+		
+		true
+	}
+	
+	fn kb_remap_up(entry: KeyMods, remap: KeyMods, key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool {
+		if key == entry.key {
+			h.curr_h = None;
+			
+			let key_to_release = remap.key;
+			let mods_to_release = remap.mods & !entry.mods;
+			let mods_to_restore = entry.mods & !remap.mods;
+			
+			h.v_mods = (h.v_mods & !(mods_to_release | Self::get_mod(key_to_release))) | mods_to_restore;
+			
+			let should_mask = Self::should_mask(mods_to_restore);
+			let is_wheel = helpers::is_mouse_wheel(key_to_release);
+			let size = (mods_to_release | mods_to_restore).count_ones() + (should_mask as u32 * 2) + (!is_wheel as u32 * 1);
+			
+			if size != 0 {
+				KeySender::with_capacity(size as usize)
+					.key_up_if(key_to_release, !is_wheel)
+					.mods_up(mods_to_release)
+					.mods_down_masked(mods_to_restore, should_mask)
+					.send();
+			}
+			
+			return true;
+		}
+		
+		if entry.mods.contains(mod_bit) {
+			h.curr_h = None;
+			
+			let key_to_release = remap.key;
+			let mods_to_release = remap.mods;
+			
+			h.v_mods &= !(mods_to_release | Self::get_mod(key_to_release));
+			
+			Self::ignore_keys(entry.mods & !mod_bit, entry.key, h);
+			
+			let is_wheel = helpers::is_mouse_wheel(key_to_release);
+			let size = mods_to_release.count_ones() + (!is_wheel as u32 * 1);
+			
+			if size != 0 {
+				KeySender::with_capacity(size as usize)
+					.key_up_if(key_to_release, !is_wheel)
+					.mods_up(mods_to_release)
+					.send();
+			}
+			
+			return true;
+		}
+		
+		false
+	}
+	
+	fn kb_remap_repeat(entry: KeyMods, remap: KeyMods, key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool {
+		if key == entry.key {
+			let key_to_repeat = remap.key;
+			
+			if helpers::is_mouse_button(key_to_repeat) { // we don't repeat mouse buttons
+				return true;
+			}
+			
+			return if key == key_to_repeat {
+				false
+			} else {
+				KeySender::send_key_down(key_to_repeat);
+				true
+			};
+		}
+		
+		if entry.mods.contains(mod_bit) { // suppress repeated entry mods (Qmk KeyOverrides issue)
+			return true;
+		}
+		
+		if !Self::get_mod(remap.key).is_none() { // key-to-mod remap
+			return false;
+		}
+		
+		let ph_mods = h.v_mods & !remap.mods | entry.mods;
+		
+		let Some(&f) = h.hotkeys.get(&(ph_mods, key)) else {
+			return false;
+		};
+			
+		let key_to_release = remap.key;
+		let mods_to_release = remap.mods & !entry.mods;
+		let mods_to_restore = entry.mods & !remap.mods;
+		
+		h.curr_h = None;
+		h.suppressed.insert(entry.key);
+		h.v_mods = ph_mods;
+		
+		let should_mask = Self::should_mask(mods_to_restore);
+		let is_wheel = helpers::is_mouse_wheel(key);
+		let size = (mods_to_release | mods_to_restore).count_ones() + (should_mask as u32 * 2) + (!is_wheel as u32 * 1);
+		
+		if size != 0 {
+			KeySender::with_capacity(size as usize)
+				.key_up_if(key_to_release, !is_wheel)
+				.mods_up(mods_to_release)
+				.mods_down_masked(mods_to_restore, should_mask)
+				.send();
+		}
+		
+		let entry = KeyMods::new(h.v_mods, key);
+		
+		match f() {
+			Hotkey::Default => Self::kb_default(entry, h),
+			Hotkey::Suppress => Self::kb_suppress(key, h),
+			Hotkey::Remap(mods, key) => Self::kb_remap(entry, KeyMods::new(mods, key), h),
+			Hotkey::Unicode(_) => todo!(),
+			Hotkey::Action(_) => todo!(),
+		}
+	}
+	
+	fn ignore_keys(mods: Mods, key: Key, h: &mut MutexGuard<'_, Handler>) {
+		if !mods.is_none() {
+			if mods.contains(Mods::LC) { h.suppressed.insert(Key::LCTRL); }
+			if mods.contains(Mods::LS) { h.suppressed.insert(Key::LSHIFT); }
+			if mods.contains(Mods::LA) { h.suppressed.insert(Key::LALT); }
+			if mods.contains(Mods::LW) { h.suppressed.insert(Key::LWIN); }
+			if mods.contains(Mods::RC) { h.suppressed.insert(Key::RCTRL); }
+			if mods.contains(Mods::RS) { h.suppressed.insert(Key::RSHIFT); }
+			if mods.contains(Mods::RA) { h.suppressed.insert(Key::RALT); }
+			if mods.contains(Mods::RW) { h.suppressed.insert(Key::RWIN); }
+		}
+		
+		h.suppressed.insert(key);
+	}
+	
 	fn get_mod(key: Key) -> Mods {
 		match key {
 			Key::LCTRL  => Mods::LC,
@@ -217,6 +368,10 @@ impl Handler {
 			Key::RWIN   => Mods::RW,
 			_ => Mods::NONE
 		}
+	}
+	
+	fn should_mask(mods: Mods) -> bool {
+		mods.contains(Mods::LAW | Mods::RAW) && !mods.contains(Mods::LC | Mods::RC)
 	}
 	
 	fn mq_handler(tx: mpsc::Sender<u32>) {
