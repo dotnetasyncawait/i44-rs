@@ -1,4 +1,4 @@
-use super::{hotkey::Hotkey, mods::Mods, keys::Key, key_sender::KeySender, constants::CALL_NEXT, helpers};
+use super::{hotkey::Hotkey, mods::Mods, keys::Key, key_sender::KeySender, constants::CALL_NEXT};
 use std::{collections::{HashMap, HashSet}, ptr, sync::{mpsc, OnceLock, Mutex, MutexGuard}, thread::{self, JoinHandle}};
 use std::collections::hash_map::Entry;
 use windows::core::Owned;
@@ -240,7 +240,7 @@ impl Handler {
 			h.v_mods = (h.v_mods & !(mods_to_release | Self::get_mod(key_to_release))) | mods_to_restore;
 			
 			let should_mask = Self::should_mask(mods_to_restore);
-			let is_wheel = helpers::is_mouse_wheel(key_to_release);
+			let is_wheel = key_to_release.is_mouse_wheel();
 			let size = (mods_to_release | mods_to_restore).count_ones() + (should_mask as u32 * 2) + (!is_wheel as u32 * 1);
 			
 			if size != 0 {
@@ -264,7 +264,7 @@ impl Handler {
 			
 			Self::ignore_keys(entry.mods & !mod_bit, entry.key, h);
 			
-			let is_wheel = helpers::is_mouse_wheel(key_to_release);
+			let is_wheel = key_to_release.is_mouse_wheel();
 			let size = mods_to_release.count_ones() + (!is_wheel as u32 * 1);
 			
 			if size != 0 {
@@ -284,7 +284,7 @@ impl Handler {
 		if key == entry.key {
 			let key_to_repeat = remap.key;
 			
-			if helpers::is_mouse_button(key_to_repeat) { // we don't repeat mouse buttons
+			if key_to_repeat.is_mouse_button() { // we don't repeat mouse buttons
 				return true;
 			}
 			
@@ -319,7 +319,7 @@ impl Handler {
 		h.v_mods = ph_mods;
 		
 		let should_mask = Self::should_mask(mods_to_restore);
-		let is_wheel = helpers::is_mouse_wheel(key);
+		let is_wheel = key_to_release.is_mouse_wheel();
 		let size = (mods_to_release | mods_to_restore).count_ones() + (should_mask as u32 * 2) + (!is_wheel as u32 * 1);
 		
 		if size != 0 {

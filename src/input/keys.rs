@@ -58,4 +58,22 @@ impl Key {
 	pub const WH_DOWN:  Key = Key(0x0206);
 	pub const WH_LEFT:  Key = Key(0x0207);
 	pub const WH_RIGHT: Key = Key(0x0208);
+	
+	// helpers
+	
+	pub(super) fn is_mouse_key(self) -> bool { self.0 & 0x0200 != 0 }
+
+	pub(super) fn is_mouse_wheel(self) -> bool {
+		const L: u16 = Key::WH_UP.0;
+		const U: u16 = Key::WH_RIGHT.0;
+		matches!(self.0, L..=U)
+	}
+
+	pub(super) fn is_mouse_button(self) -> bool {
+		const L: u16 = Key::LBUTTON.0;
+		const U: u16 = Key::XBUTTON2.0;
+		matches!(self.0, L..=U)
+	}
+
+	pub(super) fn is_extended_key(self) -> bool { self.0 & 0xE000 == 0xE000 }
 }

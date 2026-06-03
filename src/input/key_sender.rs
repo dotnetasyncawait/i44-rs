@@ -1,6 +1,6 @@
 use windows::Win32::UI::Input::KeyboardAndMouse::{INPUT, KEYBD_EVENT_FLAGS,
 	KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, SendInput};
-use super::{mods::Mods, keys::Key, helpers, extensions::InputExt, constants::CALL_NEXT};
+use super::{mods::Mods, keys::Key, extensions::InputExt, constants::CALL_NEXT};
 
 pub struct KeySender {
 	buf: Vec<INPUT>
@@ -12,7 +12,7 @@ impl KeySender {
 	}
 	
 	pub fn send_key_down(key: Key) {
-		let input = if helpers::is_mouse_key(key){
+		let input = if key.is_mouse_key(){
 			todo!()
 		} else {
 			INPUT::keybd_down(key, CALL_NEXT)
@@ -22,7 +22,7 @@ impl KeySender {
 	}
 	
 	pub fn key_down(mut self, key: Key) -> Self {
-		self.buf.push(if helpers::is_mouse_key(key) {
+		self.buf.push(if key.is_mouse_key() {
 			todo!()
 		} else {
 			INPUT::keybd_down(key, CALL_NEXT)
@@ -32,7 +32,7 @@ impl KeySender {
 	}
 	
 	pub fn key_up(mut self, key: Key) -> Self {
-		self.buf.push(if helpers::is_mouse_key(key) {
+		self.buf.push(if key.is_mouse_key() {
 			todo!()
 		} else {
 			INPUT::keybd_up(key, CALL_NEXT)
