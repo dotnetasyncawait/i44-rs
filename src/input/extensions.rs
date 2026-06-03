@@ -6,7 +6,6 @@ pub trait InputExt {
 	fn new_keybd(sc: u16, flags: KEYBD_EVENT_FLAGS, extra: usize) -> Self;
 	fn keybd_down(key: Key, extra: usize) -> Self;
 	fn keybd_up(key: Key, extra: usize) -> Self;
-	fn keybd_with_flags(key: Key, flags: KEYBD_EVENT_FLAGS, extra: usize) -> Self;
 }
 
 impl InputExt for INPUT {
@@ -14,10 +13,6 @@ impl InputExt for INPUT {
 		Self { r#type: INPUT_KEYBOARD, Anonymous: INPUT_0 {
 			ki: KEYBDINPUT { wScan: sc, dwFlags: flags, dwExtraInfo: extra, ..Default::default() } }
 		}
-	}
-	
-	fn keybd_with_flags(key: Key, flags: KEYBD_EVENT_FLAGS, extra: usize) -> Self {
-		Self::new_keybd(key.0, flags, extra)
 	}
 	
 	fn keybd_down(key: Key, extra: usize) -> Self {

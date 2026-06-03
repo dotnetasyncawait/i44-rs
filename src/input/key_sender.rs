@@ -80,20 +80,20 @@ impl KeySender {
 		if to_mask { self.buf.push(INPUT::keybd_down(Key::LCTRL, CALL_NEXT)); }
 		
 		if pressed {
-			if mods.contains(Mods::LC) { self.buf.push(INPUT::keybd_with_flags(Key::LCTRL, f,    CALL_NEXT)) };
-			if mods.contains(Mods::RC) { self.buf.push(INPUT::keybd_with_flags(Key::RCTRL, f_ex, CALL_NEXT)) };
+			if mods.contains(Mods::LC) { self.buf.push(INPUT::new_keybd(Key::LCTRL.0, f,    CALL_NEXT)) };
+			if mods.contains(Mods::RC) { self.buf.push(INPUT::new_keybd(Key::RCTRL.0, f_ex, CALL_NEXT)) };
 		}
 		
-		if mods.contains(Mods::LS) { self.buf.push(INPUT::keybd_with_flags(Key::LSHIFT, f,    CALL_NEXT)) };
-		if mods.contains(Mods::LA) { self.buf.push(INPUT::keybd_with_flags(Key::LALT,   f,    CALL_NEXT)) };
-		if mods.contains(Mods::LW) { self.buf.push(INPUT::keybd_with_flags(Key::LWIN,   f_ex, CALL_NEXT)) };
-		if mods.contains(Mods::RS) { self.buf.push(INPUT::keybd_with_flags(Key::RSHIFT, f,    CALL_NEXT)) };
-		if mods.contains(Mods::RA) { self.buf.push(INPUT::keybd_with_flags(Key::RALT,   f_ex, CALL_NEXT)) };
-		if mods.contains(Mods::RW) { self.buf.push(INPUT::keybd_with_flags(Key::RWIN,   f_ex, CALL_NEXT)) };
+		if mods.contains(Mods::LS) { self.buf.push(INPUT::new_keybd(Key::LSHIFT.0, f,    CALL_NEXT)) };
+		if mods.contains(Mods::LA) { self.buf.push(INPUT::new_keybd(Key::LALT.0,   f,    CALL_NEXT)) };
+		if mods.contains(Mods::LW) { self.buf.push(INPUT::new_keybd(Key::LWIN.0,   f_ex, CALL_NEXT)) };
+		if mods.contains(Mods::RS) { self.buf.push(INPUT::new_keybd(Key::RSHIFT.0, f,    CALL_NEXT)) };
+		if mods.contains(Mods::RA) { self.buf.push(INPUT::new_keybd(Key::RALT.0,   f_ex, CALL_NEXT)) };
+		if mods.contains(Mods::RW) { self.buf.push(INPUT::new_keybd(Key::RWIN.0,   f_ex, CALL_NEXT)) };
 		
 		if !pressed {
-			if mods.contains(Mods::LC) { self.buf.push(INPUT::keybd_with_flags(Key::LCTRL, f,    CALL_NEXT)) };
-			if mods.contains(Mods::RC) { self.buf.push(INPUT::keybd_with_flags(Key::RCTRL, f_ex, CALL_NEXT)) };
+			if mods.contains(Mods::LC) { self.buf.push(INPUT::new_keybd(Key::LCTRL.0, f,    CALL_NEXT)) };
+			if mods.contains(Mods::RC) { self.buf.push(INPUT::new_keybd(Key::RCTRL.0, f_ex, CALL_NEXT)) };
 		}
 		
 		if to_mask { self.buf.push(INPUT::keybd_up(Key::LCTRL, CALL_NEXT)); }
