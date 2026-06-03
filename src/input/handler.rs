@@ -1,14 +1,16 @@
-use super::{hotkey::Hotkey, mods::Mods, keys::Key, key_sender::KeySender, constants::CALL_NEXT};
-use std::{collections::{HashMap, HashSet}, ptr, sync::{mpsc, OnceLock, Mutex, MutexGuard}, thread::{self, JoinHandle}};
+use super::{hotkey::Hotkey, mods::Mods, keys::Key, key_sender::KeySender, constants::CALL_NEXT, extensions::InputExt};
+use std::{collections::{HashMap, HashSet}, ptr, sync::{mpsc, OnceLock, Mutex, MutexGuard, Arc}};
+use std::thread::{self, JoinHandle};
+use std::fmt::{self, Debug, Formatter};
 use std::collections::hash_map::Entry;
 use windows::core::Owned;
 use windows::Win32::{Foundation::{LPARAM, LRESULT, WPARAM}, System::Threading::GetCurrentThreadId};
 use windows::Win32::UI::{
-	Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VK_TO_VSC_EX, VK_BROWSER_BACK, VK_LAUNCH_APP2 },
+	Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VK_TO_VSC_EX, VK_BROWSER_BACK, VK_LAUNCH_APP2, INPUT, SendInput,
+		KEYEVENTF_UNICODE, KEYEVENTF_KEYUP },
 	WindowsAndMessaging::{
 		WH_KEYBOARD_LL, WM_QUIT, LLKHF_UP, LLKHF_EXTENDED, LLKHF_INJECTED, MSG, KBDLLHOOKSTRUCT,
 		SetWindowsHookExW,GetMessageW, TranslateMessage, DispatchMessageW, CallNextHookEx, PostThreadMessageW}};
-
 
 #[derive(Debug)]
 pub struct Handler {
@@ -28,11 +30,10 @@ impl KeyMods {
 	fn new(mods: Mods, key: Key) -> Self { Self { mods, key } }
 }
 
-#[derive(Debug)]
 enum CurrHotkey {
 	Default(KeyMods),
 	Remap(KeyMods, KeyMods),
-	Unicode(KeyMods, /* Vec<INPUT> */),
+	Unicode(KeyMods, Arc<Vec<INPUT>>),
 	Action(KeyMods, /* KeyEvent */)
 }
 	
@@ -124,12 +125,12 @@ impl Handler {
 		
 		if pressed {
 			if Self::kb_key_down(key, mod_bit, &mut h) {
-				return true
+				return true;
 			}
 			h.v_mods |= mod_bit;
 		} else {
 			if Self::kb_key_up(key, mod_bit, &mut h) {
-				return true
+				return true;
 			}
 			h.v_mods &= !mod_bit;
 		}
@@ -146,23 +147,15 @@ impl Handler {
 			return match curr_h {
 				CurrHotkey::Default(entry) => Self::kb_default_repeat(*entry, key, mod_bit),
 				CurrHotkey::Remap(entry, remap) => Self::kb_remap_repeat(*entry, *remap, key, mod_bit, h),
-				CurrHotkey::Unicode(_) => todo!(),
+				CurrHotkey::Unicode(entry, inputs) => Self::kb_unicode_repeat(*entry, inputs.clone(), key, mod_bit, h),
 				CurrHotkey::Action(_) => todo!()
 			};
 		}
 		
-		let Some(&f) = h.hotkeys.get(&(h.v_mods, key)) else {
-			return false;
-		};
-		
-		let entry = KeyMods::new(h.v_mods, key);
-		
-		match f() {
-			Hotkey::Default => Self::kb_default(entry, h),
-			Hotkey::Suppress => Self::kb_suppress(key, h),
-			Hotkey::Remap(mods, key) => Self::kb_remap(entry, KeyMods::new(mods, key), h),
-			Hotkey::Unicode(_) => todo!(),
-			Hotkey::Action(_) => todo!()
+		if let Some(&f) = h.hotkeys.get(&(h.v_mods, key)) {
+			Self::map_hotkey(f, KeyMods::new(h.v_mods, key), h)
+		} else {
+			false
 		}
 	}
 	
@@ -175,7 +168,7 @@ impl Handler {
 			Some(curr_h) => match curr_h {
 				CurrHotkey::Default(entry) => Self::kb_default_up(*entry, key, mod_bit, h),
 				CurrHotkey::Remap(entry, remap) => Self::kb_remap_up(*entry, *remap, key, mod_bit, h),
-				CurrHotkey::Unicode(_) => todo!(),
+				CurrHotkey::Unicode(entry, _) => Self::kb_unicode_up(*entry, key, mod_bit, h),
 				CurrHotkey::Action(_) => todo!()
 			},
 			None => false
@@ -315,8 +308,8 @@ impl Handler {
 		let mods_to_restore = entry.mods & !remap.mods;
 		
 		h.curr_h = None;
-		h.suppressed.insert(entry.key);
 		h.v_mods = ph_mods;
+		h.suppressed.insert(entry.key);
 		
 		let should_mask = Self::should_mask(mods_to_restore);
 		let is_wheel = key_to_release.is_mouse_wheel();
@@ -330,14 +323,105 @@ impl Handler {
 				.send();
 		}
 		
-		let entry = KeyMods::new(h.v_mods, key);
+		Self::map_hotkey(f, KeyMods::new(h.v_mods, key), h)
+	}
+	
+	fn kb_unicode(entry: KeyMods, str: &'static str, h: &mut MutexGuard<'_, Handler>) -> bool {
+		let encoded: Vec<u16> = str.encode_utf16().collect();
+		let mut inputs: Vec<INPUT> = Vec::with_capacity(encoded.len());
+		let mut iter = encoded.into_iter();
 		
+		while let Some(ch) = iter.next() {
+			if ch < 0xD800 {
+				inputs.push(INPUT::new_keybd(ch, KEYEVENTF_UNICODE, CALL_NEXT));
+				inputs.push(INPUT::new_keybd(ch, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, CALL_NEXT));
+			} else {
+				let low = iter.next().expect("must be valid surrogate pair");
+				inputs.push(INPUT::new_keybd(ch,  KEYEVENTF_UNICODE, CALL_NEXT));
+				inputs.push(INPUT::new_keybd(low, KEYEVENTF_UNICODE, CALL_NEXT));
+				inputs.push(INPUT::new_keybd(ch,  KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, CALL_NEXT));
+				inputs.push(INPUT::new_keybd(low, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, CALL_NEXT));
+			}
+		}
+		
+		let mods_to_release = entry.mods;
+		let inputs = Arc::new(inputs);
+		
+		h.v_mods = Mods::NONE;
+		h.curr_h = Some(CurrHotkey::Unicode(entry, inputs.clone()));
+		
+		if !mods_to_release.is_none() {
+			let should_mask = Self::should_mask(mods_to_release);
+			let size = mods_to_release.count_ones() + (should_mask as u32 * 2);
+			KeySender::with_capacity(size as usize).mods_up_masked(mods_to_release, should_mask).send();
+		}
+		
+		unsafe { SendInput(&inputs, size_of::<INPUT>() as i32); }
+		true
+	}
+	
+	fn kb_unicode_up(entry: KeyMods, key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool {
+		let mods_to_restore;
+		
+		if key == entry.key {
+			mods_to_restore = entry.mods;
+		} else if entry.mods.contains(mod_bit) {
+			mods_to_restore = entry.mods & !mod_bit;
+			h.suppressed.insert(entry.key);
+		} else {
+			return false;
+		}
+		
+		h.curr_h = None;
+		h.v_mods |= mods_to_restore;
+		
+		if !mods_to_restore.is_none() {
+			let should_mask = Self::should_mask(mods_to_restore);
+			let size = mods_to_restore.count_ones() + (should_mask as u32 * 2);
+			KeySender::with_capacity(size as usize).mods_down_masked(mods_to_restore, should_mask).send();
+		}
+		
+		true
+	}
+	
+	fn kb_unicode_repeat(
+		entry: KeyMods, inputs: Arc<Vec<INPUT>>, key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool
+	{
+		if key == entry.key {
+			unsafe { SendInput(&inputs, size_of::<INPUT>() as i32); }
+			return true;
+		}
+		
+		if entry.mods.contains(mod_bit) {
+			return true;
+		}
+		
+		let Some(&f) = h.hotkeys.get(&(h.v_mods | entry.mods, key)) else {
+			return false;
+		};
+		
+		let mods_to_restore = entry.mods;
+		
+		h.curr_h = None;
+		h.v_mods |= mods_to_restore;
+		h.suppressed.insert(entry.key);
+		
+		if !mods_to_restore.is_none() {
+			let should_mask = Self::should_mask(mods_to_restore);
+			let size = mods_to_restore.count_ones() + (should_mask as u32 * 2);
+			KeySender::with_capacity(size as usize).mods_down_masked(mods_to_restore, should_mask).send();
+		}
+		
+		Self::map_hotkey(f, KeyMods::new(h.v_mods, key), h)
+	}
+	
+	fn map_hotkey(f: fn() -> Hotkey, entry: KeyMods, h: &mut MutexGuard<'_, Handler>) -> bool {
 		match f() {
 			Hotkey::Default => Self::kb_default(entry, h),
-			Hotkey::Suppress => Self::kb_suppress(key, h),
+			Hotkey::Suppress => Self::kb_suppress(entry.key, h),
 			Hotkey::Remap(mods, key) => Self::kb_remap(entry, KeyMods::new(mods, key), h),
-			Hotkey::Unicode(_) => todo!(),
-			Hotkey::Action(_) => todo!(),
+			Hotkey::Unicode(str) => Self::kb_unicode(entry, str, h),
+			Hotkey::Action(_) => todo!()
 		}
 	}
 	
@@ -396,6 +480,17 @@ impl Handler {
 					_ = unsafe { DispatchMessageW(&msg) };
 				}
 			}
+		}
+	}
+}
+
+impl Debug for CurrHotkey {
+	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Default(entry) => f.debug_tuple("Default").field(entry).finish(),
+			Self::Remap(entry, remap) => f.debug_tuple("Remap").field(entry).field(remap).finish(),
+			Self::Unicode(entry, _) => f.debug_tuple("Unicode").field(entry).finish(), // TODO
+			Self::Action(arg0) => f.debug_tuple("Action").field(arg0).finish(), // TODO
 		}
 	}
 }
