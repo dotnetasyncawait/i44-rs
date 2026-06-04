@@ -164,13 +164,80 @@ impl Key {
 	pub const WH_LEFT:  Key = Key(0x0207);
 	pub const WH_RIGHT: Key = Key(0x0208);
 	
+	pub const WH_UP_X2:  Key = Key::WH_UP.or(0x1000); // Wheel multipliers
+	pub const WH_UP_X3:  Key = Key::WH_UP.or(0x2000);
+	pub const WH_UP_X4:  Key = Key::WH_UP.or(0x3000);
+	pub const WH_UP_X5:  Key = Key::WH_UP.or(0x4000);
+	pub const WH_UP_X6:  Key = Key::WH_UP.or(0x5000);
+	pub const WH_UP_X7:  Key = Key::WH_UP.or(0x6000);
+	pub const WH_UP_X8:  Key = Key::WH_UP.or(0x7000);
+	pub const WH_UP_X9:  Key = Key::WH_UP.or(0x8000);
+	pub const WH_UP_X10: Key = Key::WH_UP.or(0x9000);
+	pub const WH_UP_X11: Key = Key::WH_UP.or(0xA000);
+	pub const WH_UP_X12: Key = Key::WH_UP.or(0xB000);
+	pub const WH_UP_X13: Key = Key::WH_UP.or(0xC000);
+	pub const WH_UP_X14: Key = Key::WH_UP.or(0xD000);
+	pub const WH_UP_X15: Key = Key::WH_UP.or(0xE000);
+	pub const WH_UP_X16: Key = Key::WH_UP.or(0xF000);
+	
+	pub const WH_DOWN_X2:  Key = Key::WH_DOWN.or(0x1000);
+	pub const WH_DOWN_X3:  Key = Key::WH_DOWN.or(0x2000);
+	pub const WH_DOWN_X4:  Key = Key::WH_DOWN.or(0x3000);
+	pub const WH_DOWN_X5:  Key = Key::WH_DOWN.or(0x4000);
+	pub const WH_DOWN_X6:  Key = Key::WH_DOWN.or(0x5000);
+	pub const WH_DOWN_X7:  Key = Key::WH_DOWN.or(0x6000);
+	pub const WH_DOWN_X8:  Key = Key::WH_DOWN.or(0x7000);
+	pub const WH_DOWN_X9:  Key = Key::WH_DOWN.or(0x8000);
+	pub const WH_DOWN_X10: Key = Key::WH_DOWN.or(0x9000);
+	pub const WH_DOWN_X11: Key = Key::WH_DOWN.or(0xA000);
+	pub const WH_DOWN_X12: Key = Key::WH_DOWN.or(0xB000);
+	pub const WH_DOWN_X13: Key = Key::WH_DOWN.or(0xC000);
+	pub const WH_DOWN_X14: Key = Key::WH_DOWN.or(0xD000);
+	pub const WH_DOWN_X15: Key = Key::WH_DOWN.or(0xE000);
+	pub const WH_DOWN_X16: Key = Key::WH_DOWN.or(0xF000);
+	
+	pub const WH_LEFT_X2:  Key = Key::WH_LEFT.or(0x1000);
+	pub const WH_LEFT_X3:  Key = Key::WH_LEFT.or(0x2000);
+	pub const WH_LEFT_X4:  Key = Key::WH_LEFT.or(0x3000);
+	pub const WH_LEFT_X5:  Key = Key::WH_LEFT.or(0x4000);
+	pub const WH_LEFT_X6:  Key = Key::WH_LEFT.or(0x5000);
+	pub const WH_LEFT_X7:  Key = Key::WH_LEFT.or(0x6000);
+	pub const WH_LEFT_X8:  Key = Key::WH_LEFT.or(0x7000);
+	pub const WH_LEFT_X9:  Key = Key::WH_LEFT.or(0x8000);
+	pub const WH_LEFT_X10: Key = Key::WH_LEFT.or(0x9000);
+	pub const WH_LEFT_X11: Key = Key::WH_LEFT.or(0xA000);
+	pub const WH_LEFT_X12: Key = Key::WH_LEFT.or(0xB000);
+	pub const WH_LEFT_X13: Key = Key::WH_LEFT.or(0xC000);
+	pub const WH_LEFT_X14: Key = Key::WH_LEFT.or(0xD000);
+	pub const WH_LEFT_X15: Key = Key::WH_LEFT.or(0xE000);
+	pub const WH_LEFT_X16: Key = Key::WH_LEFT.or(0xF000);
+	
+	pub const WH_RIGHT_X2:  Key = Key::WH_RIGHT.or(0x1000);
+	pub const WH_RIGHT_X3:  Key = Key::WH_RIGHT.or(0x2000);
+	pub const WH_RIGHT_X4:  Key = Key::WH_RIGHT.or(0x3000);
+	pub const WH_RIGHT_X5:  Key = Key::WH_RIGHT.or(0x4000);
+	pub const WH_RIGHT_X6:  Key = Key::WH_RIGHT.or(0x5000);
+	pub const WH_RIGHT_X7:  Key = Key::WH_RIGHT.or(0x6000);
+	pub const WH_RIGHT_X8:  Key = Key::WH_RIGHT.or(0x7000);
+	pub const WH_RIGHT_X9:  Key = Key::WH_RIGHT.or(0x8000);
+	pub const WH_RIGHT_X10: Key = Key::WH_RIGHT.or(0x9000);
+	pub const WH_RIGHT_X11: Key = Key::WH_RIGHT.or(0xA000);
+	pub const WH_RIGHT_X12: Key = Key::WH_RIGHT.or(0xB000);
+	pub const WH_RIGHT_X13: Key = Key::WH_RIGHT.or(0xC000);
+	pub const WH_RIGHT_X14: Key = Key::WH_RIGHT.or(0xD000);
+	pub const WH_RIGHT_X15: Key = Key::WH_RIGHT.or(0xE000);
+	pub const WH_RIGHT_X16: Key = Key::WH_RIGHT.or(0xF000);
+	
+	const fn or(self, other: u16) -> Self {
+		Self(self.0 | other)
+	}
 	
 	pub(super) fn is_mouse_key(self) -> bool { self.0 & 0x0200 != 0 }
 
 	pub(super) fn is_mouse_wheel(self) -> bool {
 		const L: u16 = Key::WH_UP.0;
 		const U: u16 = Key::WH_RIGHT.0;
-		matches!(self.0, L..=U)
+		matches!(self.0 & 0x02FF, L..=U) // excluding wheel-multiplier
 	}
 
 	pub(super) fn is_mouse_button(self) -> bool {

@@ -13,7 +13,7 @@ impl KeySender {
 	
 	pub fn send_key_down(key: Key) {
 		let input = if key.is_mouse_key(){
-			todo!()
+			INPUT::mouse_down(key, CALL_NEXT)
 		} else {
 			INPUT::keybd_down(key, CALL_NEXT)
 		};
@@ -23,7 +23,7 @@ impl KeySender {
 	
 	pub fn key_down(mut self, key: Key) -> Self {
 		self.buf.push(if key.is_mouse_key() {
-			todo!()
+			INPUT::mouse_down(key, CALL_NEXT)
 		} else {
 			INPUT::keybd_down(key, CALL_NEXT)
 		});
@@ -33,7 +33,7 @@ impl KeySender {
 	
 	pub fn key_up(mut self, key: Key) -> Self {
 		self.buf.push(if key.is_mouse_key() {
-			todo!()
+			INPUT::mouse_up(key, CALL_NEXT)
 		} else {
 			INPUT::keybd_up(key, CALL_NEXT)
 		});
