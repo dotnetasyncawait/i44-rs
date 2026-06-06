@@ -12,25 +12,34 @@ impl InputBuilder {
 		let len = encoded.len();
 		
 		let mut inputs: Vec<INPUT> = Vec::with_capacity(len);
-		let mut iter = encoded.into_iter();
-		
-		while let Some(ch) = iter.next() {
-			if ch < 0xD800 {
-				inputs.push(INPUT::new_keybd(ch, KEYEVENTF_UNICODE, CALL_NEXT));
-				inputs.push(INPUT::new_keybd(ch, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, CALL_NEXT));
-			} else {
-				let low = iter.next().expect("must be valid surrogate pair");
-				inputs.push(INPUT::new_keybd(ch,  KEYEVENTF_UNICODE, CALL_NEXT));
-				inputs.push(INPUT::new_keybd(low, KEYEVENTF_UNICODE, CALL_NEXT));
-				inputs.push(INPUT::new_keybd(ch,  KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, CALL_NEXT));
-				inputs.push(INPUT::new_keybd(low, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, CALL_NEXT));
-			}
-		}
+		Self::fill_chars(encoded, &mut inputs);
 		
 		let last = &mut inputs[len - 1];
 		last.Anonymous.ki.dwExtraInfo = CALL_NEXT_END;
 		
 		inputs
+	}
+	
+	pub fn add_unicode(mut self, encoded: Vec<u16>) -> Self {
+		Self::fill_chars(encoded, &mut self.buf);
+		self
+	}
+	
+	fn fill_chars(encoded: Vec<u16>, buf: &mut Vec<INPUT>) {
+		let mut iter = encoded.into_iter();
+		
+		while let Some(ch) = iter.next() {
+			if ch < 0xD800 {
+				buf.push(INPUT::new_keybd(ch, KEYEVENTF_UNICODE, CALL_NEXT));
+				buf.push(INPUT::new_keybd(ch, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, CALL_NEXT));
+			} else {
+				let low = iter.next().expect("must be valid surrogate pair");
+				buf.push(INPUT::new_keybd(ch,  KEYEVENTF_UNICODE, CALL_NEXT));
+				buf.push(INPUT::new_keybd(low, KEYEVENTF_UNICODE, CALL_NEXT));
+				buf.push(INPUT::new_keybd(ch,  KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, CALL_NEXT));
+				buf.push(INPUT::new_keybd(low, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, CALL_NEXT));
+			}
+		}
 	}
 	
 	pub fn with_capacity(cap: usize) -> Self {

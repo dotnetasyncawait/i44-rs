@@ -159,6 +159,10 @@ impl Handler {
 		let mut s = unsafe { ptr::read(lparam.0 as *const KBDLLHOOKSTRUCT) };
 		let mut h: Option<MutexGuard<'_, Handler>> = None;
 		
+		// IMPORTANT: drop locked handle before calling the next hook.
+		// CallNextHookEx can pick up a message from the message queue and re-enter,
+		// or execute Mouse hook (which will try to take the lock and panic).
+		
 		match s.dwExtraInfo {
 			CALL_NEXT => return call_next(code, wparam, lparam),
 			CALL_NEXT_END => {
@@ -170,6 +174,7 @@ impl Handler {
 				let _h = Self::lock_handler();
 				if _h.send_count != 0 {
 					let Some((key, pressed)) = Self::kb_get_key(&s) else {
+						drop(_h);
 						return call_next(code, wparam, lparam); // TODO: block injected key?
 					};
 					if !pressed {
@@ -182,6 +187,7 @@ impl Handler {
 		}
 		
 		let Some((key, pressed)) = Self::kb_get_key(&s) else {
+			drop(h);
 			return call_next(code, wparam, lparam); // TODO: block injected key?
 		};
 		
@@ -190,6 +196,7 @@ impl Handler {
 		if Self::handle_kb(key, pressed, &mut h) {
 			LRESULT(1)
 		} else {
+			drop(h);
 			call_next(code, wparam, lparam)
 		}
 	}
@@ -201,6 +208,10 @@ impl Handler {
 		
 		let mut s = unsafe { ptr::read(lparam.0 as *const MSLLHOOKSTRUCT) };
 		let mut h: Option<MutexGuard<'_, Handler>> = None;
+		
+		if s.flags & LLMHF_INJECTED != 0 {
+			return call_next(code, wparam, lparam);
+		}
 		
 		match s.dwExtraInfo {
 			CALL_NEXT => return call_next(code, wparam, lparam),
@@ -222,17 +233,13 @@ impl Handler {
 			}
 		}
 		
-		if s.flags & LLMHF_INJECTED != 0 {
-			return call_next(code, wparam, lparam);
-		}
-		
 		let (key, pressed) = Self::ms_get_key(wparam, s.mouseData);
 		let mut h = h.take().unwrap_or_else(Self::lock_handler);
 		
 		if Self::handle_ms(key, pressed, &mut h) {
 			LRESULT(1)
 		} else {
-			return call_next(code, wparam, lparam);
+			call_next(code, wparam, lparam)
 		}
 	}
 	
@@ -302,8 +309,37 @@ impl Handler {
 				h.sender.send(inputs).unwrap();
 				true
 			},
-			Hotkey::Unicode(_) => todo!(),
-			Hotkey::Action(_) => todo!()
+			Hotkey::Unicode(str) => {
+				let encoded = str.encode_utf16().collect::<Vec<u16>>();
+				let entry_mods = entry.mods;
+				let should_mask = Self::should_mask(entry_mods);
+				let size = (entry_mods.count_ones() + (should_mask as u32 * 2) + encoded.len() as u32) * 2;
+				
+				if size != 0 {
+					let inputs = InputBuilder::with_capacity(size as _)
+						.mods_up_masked(entry_mods, should_mask)
+						.add_unicode(encoded)
+						.mods_down_masked(entry_mods, should_mask)
+						.build();
+					
+					h.send_count += 1;
+					h.sender.send(inputs).unwrap();
+				}
+				
+				true
+			},
+			Hotkey::Action(action) => {
+				let (event, notf) = KeyEvent::new();
+				// Mouse wheel has only `down` state, so the event will always report 'up'.
+				notf.notify();
+				// Since there's no 'up' event for wheel-keys, we don't store the currently performing hotkey.
+				// Hence, it will allow to run a new action before the previous one has completed.
+				// It could be fixed by notifying back from the runner thread (once the action is run to completion),
+				// but it would require adding a new field to the Handler/CurrHotkey::Action, specifically for this case.
+				// Since actions on wheel keys are rare (not any for now), it should not be a problem.
+				thread::spawn(move || action(event));
+				true
+			}
 		}
 	}
 	
@@ -512,6 +548,10 @@ impl Handler {
 	}
 	
 	fn kb_unicode(entry: KeyMods, str: &'static str, h: &mut MutexGuard<'_, Handler>) -> bool {
+		if str.len() == 0 {
+			return true; // same as Hotkey::Suppress
+		}
+		
 		let inputs = InputBuilder::unicode(str);
 		let mods_to_release = entry.mods;
 		
