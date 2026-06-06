@@ -47,22 +47,30 @@ static HANDLER: OnceLock<Mutex<Handler>> = OnceLock::new();
 static WORKER: OnceLock<Mutex<Worker>> = OnceLock::new();
 
 pub fn wait() {
-	if let Some(worker) = WORKER.get() {
-		let handle = worker.lock().unwrap().0.take();
-		if let Some(h) = handle {
-			h.join().unwrap();
-		}
+	let Some(worker) = WORKER.get() else {
+		unreachable!("should not be called before initialization");
+	};
+	
+	let handle = worker.lock().unwrap().0.take();
+	if let Some(h) = handle {
+		h.join().unwrap();
 		
-		let h = HANDLER.get().expect("handler should be set if worker is");
-		let mut g = h.lock().unwrap();
-		let _ = std::mem::replace(&mut *g, Handler::new());
+		let mut h = HANDLER
+			.get().expect("handler should be set if worker is")
+			.lock().unwrap();
+	
+		let _ = std::mem::replace(&mut *h, Handler::new());
 	}
 }
 
 pub fn exit() {
 	if let Some(worker) = WORKER.get() {
-		let thread_id = worker.lock().unwrap().1;
-		unsafe { PostThreadMessageW(thread_id, WM_QUIT, WPARAM(0), LPARAM(0)).unwrap() };
+		let mut w = worker.lock().unwrap();
+		let thread_id = w.1;
+		if thread_id != 0 {
+			w.1 = 0;
+			unsafe { PostThreadMessageW(thread_id, WM_QUIT, WPARAM(0), LPARAM(0)).unwrap() };
+		}
 	}
 }
 
