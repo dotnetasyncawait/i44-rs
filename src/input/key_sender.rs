@@ -1,5 +1,5 @@
 use windows::Win32::UI::Input::KeyboardAndMouse::{INPUT, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS,
-	KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, SendInput};
+	KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE};
 use super::{mods::Mods, keys::Key, extensions::InputExt, constants::{CALL_NEXT, CALL_NEXT_END}};
 
 pub struct InputBuilder {
@@ -7,6 +7,32 @@ pub struct InputBuilder {
 }
 
 impl InputBuilder {
+	pub fn unicode(str: &str) -> Vec<INPUT> {
+		let encoded: Vec<u16> = str.encode_utf16().collect();
+		let len = encoded.len();
+		
+		let mut inputs: Vec<INPUT> = Vec::with_capacity(len);
+		let mut iter = encoded.into_iter();
+		
+		while let Some(ch) = iter.next() {
+			if ch < 0xD800 {
+				inputs.push(INPUT::new_keybd(ch, KEYEVENTF_UNICODE, CALL_NEXT));
+				inputs.push(INPUT::new_keybd(ch, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, CALL_NEXT));
+			} else {
+				let low = iter.next().expect("must be valid surrogate pair");
+				inputs.push(INPUT::new_keybd(ch,  KEYEVENTF_UNICODE, CALL_NEXT));
+				inputs.push(INPUT::new_keybd(low, KEYEVENTF_UNICODE, CALL_NEXT));
+				inputs.push(INPUT::new_keybd(ch,  KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, CALL_NEXT));
+				inputs.push(INPUT::new_keybd(low, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, CALL_NEXT));
+			}
+		}
+		
+		let last = &mut inputs[len - 1];
+		last.Anonymous.ki.dwExtraInfo = CALL_NEXT_END;
+		
+		inputs
+	}
+	
 	pub fn with_capacity(cap: usize) -> Self {
 		Self { buf: Vec::with_capacity(cap) }
 	}
@@ -91,7 +117,9 @@ impl InputBuilder {
 	
 	pub fn build(mut self) -> Vec<INPUT> {
 		let len = self.buf.len();
+		
 		debug_assert!(len != 0);
+		debug_assert_eq!(len, self.buf.capacity());
 		
 		let last = &mut self.buf[len - 1];
 		match last.r#type {
@@ -100,10 +128,6 @@ impl InputBuilder {
 			_ => unreachable!()
 		}
 		
-		self.buf.clone() // TODO: use Option<>.take()
-	}
-	
-	pub fn send(self) {
-		unsafe { SendInput(&self.buf, size_of::<INPUT>() as i32); }
+		std::mem::take(&mut self.buf)
 	}
 }

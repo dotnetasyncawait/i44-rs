@@ -1,17 +1,16 @@
 use super::{hotkey::Hotkey, mods::Mods, keys::Key, key_sender::InputBuilder, extensions::InputExt};
 use super::constants::{CALL_NEXT, CALL_NEXT_END, CACHED_EVENT};
 use super::key_event::{KeyEvent, KeyEventNotifier};
-use std::{collections::{HashMap, HashSet, hash_map::Entry}, ptr, sync::{mpsc, OnceLock, Mutex, MutexGuard, Arc}};
+use std::{collections::{HashMap, HashSet, hash_map::Entry}, ptr, sync::{mpsc, OnceLock, Mutex, MutexGuard}};
 use std::thread::{self, JoinHandle};
 use std::fmt::{self, Debug, Formatter};
 use windows::core::Owned;
 use windows::Win32::{Foundation::{LPARAM, LRESULT, WPARAM}, System::Threading::GetCurrentThreadId};
 use windows::Win32::UI::{
-	Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VK_TO_VSC_EX, VK_BROWSER_BACK, VK_LAUNCH_APP2, INPUT, SendInput,
-		KEYEVENTF_UNICODE, KEYEVENTF_KEYUP },
+	Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VK_TO_VSC_EX, VK_BROWSER_BACK, VK_LAUNCH_APP2, INPUT, SendInput},
 	WindowsAndMessaging::{WH_KEYBOARD_LL, WH_MOUSE_LL, WM_QUIT, LLKHF_UP, LLKHF_EXTENDED, LLKHF_INJECTED, MSG,
 		LLMHF_INJECTED, MSLLHOOKSTRUCT, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE,
-		WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP, XBUTTON1, XBUTTON2,
+		WM_MOUSEWHEEL, WM_MOUSEHWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP, XBUTTON1, XBUTTON2,
 		KBDLLHOOKSTRUCT, SetWindowsHookExW,GetMessageW, TranslateMessage, DispatchMessageW, CallNextHookEx,
 		PostThreadMessageW}};
 
@@ -38,7 +37,9 @@ impl KeyMods {
 enum CurrHotkey {
 	Default(KeyMods),
 	Remap(KeyMods, KeyMods),
-	Unicode(KeyMods, Arc<Vec<INPUT>>), // TODO: use just Vec<INPUT> if it's, anyways, copied?
+	// Note: Unicode inputs are mostly short in length (usually 1 or 2 characters),
+	// so cloning is ok (I guess...)
+	Unicode(KeyMods, Vec<INPUT>),
 	Action(KeyMods, KeyEventNotifier)
 }
 	
@@ -141,10 +142,12 @@ impl Handler {
 			WM_XBUTTONUP   if (data >> 16) == XBUTTON1 as _ => (Key::XBUTTON1, false),
 			WM_XBUTTONUP   if (data >> 16) == XBUTTON2 as _ => (Key::XBUTTON2, false),
 			
-			WM_MOUSEWHEEL if (data as i32) > 0 => (Key::WH_UP, true),
-			WM_MOUSEWHEEL if (data as i32) < 0 => (Key::WH_DOWN, true),
+			WM_MOUSEWHEEL  if ((data >> 16) as i16) > 0 => (Key::WH_UP, true),
+			WM_MOUSEWHEEL  if ((data >> 16) as i16) < 0 => (Key::WH_DOWN, true),
+			WM_MOUSEHWHEEL if ((data >> 16) as i16) < 0 => (Key::WH_LEFT, true),
+			WM_MOUSEHWHEEL if ((data >> 16) as i16) > 0 => (Key::WH_RIGHT, true),
 			
-			_ => unreachable!("mouse wparam match should be exhaustive: 0x{:X}, {}", wparam.0, data)
+			_ => todo!("mouse wparam match should be exhaustive: 0x{:X}, {}", wparam.0, data)
 		}
 	}
 	
@@ -313,7 +316,7 @@ impl Handler {
 			return match curr_h {
 				CurrHotkey::Default(entry) => Self::kb_default_repeat(*entry, key, mod_bit),
 				CurrHotkey::Remap(entry, remap) => Self::kb_remap_repeat(*entry, *remap, key, mod_bit, h),
-				CurrHotkey::Unicode(entry, inputs) => Self::kb_unicode_repeat(*entry, Arc::clone(inputs), key, mod_bit, h),
+				CurrHotkey::Unicode(entry, inputs) => Self::kb_unicode_repeat(*entry, inputs.clone(), key, mod_bit, h),
 				CurrHotkey::Action(entry, _) => Self::kb_action_repeat(*entry, key, mod_bit)
 			};
 		}
@@ -509,36 +512,26 @@ impl Handler {
 	}
 	
 	fn kb_unicode(entry: KeyMods, str: &'static str, h: &mut MutexGuard<'_, Handler>) -> bool {
-		let encoded: Vec<u16> = str.encode_utf16().collect();
-		let mut inputs: Vec<INPUT> = Vec::with_capacity(encoded.len());
-		let mut iter = encoded.into_iter();
-		
-		while let Some(ch) = iter.next() {
-			if ch < 0xD800 {
-				inputs.push(INPUT::new_keybd(ch, KEYEVENTF_UNICODE, CALL_NEXT));
-				inputs.push(INPUT::new_keybd(ch, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, CALL_NEXT));
-			} else {
-				let low = iter.next().expect("must be valid surrogate pair");
-				inputs.push(INPUT::new_keybd(ch,  KEYEVENTF_UNICODE, CALL_NEXT));
-				inputs.push(INPUT::new_keybd(low, KEYEVENTF_UNICODE, CALL_NEXT));
-				inputs.push(INPUT::new_keybd(ch,  KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, CALL_NEXT));
-				inputs.push(INPUT::new_keybd(low, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, CALL_NEXT));
-			}
-		}
-		
+		let inputs = InputBuilder::unicode(str);
 		let mods_to_release = entry.mods;
-		let inputs = Arc::new(inputs);
 		
 		h.v_mods = Mods::NONE;
-		h.curr_h = Some(CurrHotkey::Unicode(entry, Arc::clone(&inputs)));
+		h.curr_h = Some(CurrHotkey::Unicode(entry, inputs.clone()));
 		
 		if !mods_to_release.is_none() {
 			let should_mask = Self::should_mask(mods_to_release);
 			let size = mods_to_release.count_ones() + (should_mask as u32 * 2);
-			InputBuilder::with_capacity(size as usize).mods_up_masked(mods_to_release, should_mask).send(); // TODO: use sender
+			
+			let keys = InputBuilder::with_capacity(size as _)
+				.mods_up_masked(mods_to_release, should_mask)
+				.build();
+			
+			h.send_count += 1;
+			h.sender.send(keys).unwrap();
 		}
 		
-		unsafe { SendInput(&inputs, size_of::<INPUT>() as i32); } // TODO: use sender
+		h.send_count += 1;
+		h.sender.send(inputs).unwrap();
 		true
 	}
 	
@@ -560,17 +553,24 @@ impl Handler {
 		if !mods_to_restore.is_none() {
 			let should_mask = Self::should_mask(mods_to_restore);
 			let size = mods_to_restore.count_ones() + (should_mask as u32 * 2);
-			InputBuilder::with_capacity(size as usize).mods_down_masked(mods_to_restore, should_mask).send(); // TOOD: use sender
+			
+			let inputs = InputBuilder::with_capacity(size as _)
+				.mods_down_masked(mods_to_restore, should_mask)
+				.build();
+			
+			h.send_count += 1;
+			h.sender.send(inputs).unwrap();
 		}
 		
 		true
 	}
 	
 	fn kb_unicode_repeat(
-		entry: KeyMods, inputs: Arc<Vec<INPUT>>, key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool
+		entry: KeyMods, inputs: Vec<INPUT>, key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool
 	{
 		if key == entry.key {
-			unsafe { SendInput(&inputs, size_of::<INPUT>() as i32); } // TODO: use sender
+			h.send_count += 1;
+			h.sender.send(inputs).unwrap();
 			return true;
 		}
 		
@@ -591,7 +591,13 @@ impl Handler {
 		if !mods_to_restore.is_none() {
 			let should_mask = Self::should_mask(mods_to_restore);
 			let size = mods_to_restore.count_ones() + (should_mask as u32 * 2);
-			InputBuilder::with_capacity(size as usize).mods_down_masked(mods_to_restore, should_mask).send(); // TODO: use sender
+			
+			let inputs = InputBuilder::with_capacity(size as _)
+				.mods_down_masked(mods_to_restore, should_mask)
+				.build();
+			
+			h.send_count += 1;
+			h.sender.send(inputs).unwrap();
 		}
 		
 		Self::map_hotkey(f, KeyMods::new(h.v_mods, key), h)
