@@ -1,24 +1,14 @@
-use windows::Win32::UI::Input::KeyboardAndMouse::{INPUT, KEYBD_EVENT_FLAGS,
+use windows::Win32::UI::Input::KeyboardAndMouse::{INPUT, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS,
 	KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, SendInput};
-use super::{mods::Mods, keys::Key, extensions::InputExt, constants::CALL_NEXT};
+use super::{mods::Mods, keys::Key, extensions::InputExt, constants::{CALL_NEXT, CALL_NEXT_END}};
 
-pub struct KeySender {
+pub struct InputBuilder {
 	buf: Vec<INPUT>
 }
 
-impl KeySender {
+impl InputBuilder {
 	pub fn with_capacity(cap: usize) -> Self {
 		Self { buf: Vec::with_capacity(cap) }
-	}
-	
-	pub fn send_key_down(key: Key) {
-		let input = if key.is_mouse_key(){
-			INPUT::mouse_down(key, CALL_NEXT)
-		} else {
-			INPUT::keybd_down(key, CALL_NEXT)
-		};
-		
-		unsafe { SendInput(&[input], size_of::<INPUT>() as i32); }
 	}
 	
 	pub fn key_down(mut self, key: Key) -> Self {
@@ -97,6 +87,20 @@ impl KeySender {
 		}
 		
 		if to_mask { self.buf.push(INPUT::keybd_up(Key::LCTRL, CALL_NEXT)); }
+	}
+	
+	pub fn build(mut self) -> Vec<INPUT> {
+		let len = self.buf.len();
+		debug_assert!(len != 0);
+		
+		let last = &mut self.buf[len - 1];
+		match last.r#type {
+			INPUT_KEYBOARD => last.Anonymous.ki.dwExtraInfo = CALL_NEXT_END,
+			INPUT_MOUSE    => last.Anonymous.mi.dwExtraInfo = CALL_NEXT_END,
+			_ => unreachable!()
+		}
+		
+		self.buf.clone() // TODO: use Option<>.take()
 	}
 	
 	pub fn send(self) {

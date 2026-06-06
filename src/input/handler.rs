@@ -1,18 +1,19 @@
-use super::{hotkey::Hotkey, mods::Mods, keys::Key, key_sender::KeySender, constants::CALL_NEXT, extensions::InputExt};
+use super::{hotkey::Hotkey, mods::Mods, keys::Key, key_sender::InputBuilder, extensions::InputExt};
+use super::constants::{CALL_NEXT, CALL_NEXT_END, CACHED_EVENT};
 use super::key_event::{KeyEvent, KeyEventNotifier};
-use std::{collections::{HashMap, HashSet}, ptr, sync::{mpsc, OnceLock, Mutex, MutexGuard, Arc}};
+use std::{collections::{HashMap, HashSet, hash_map::Entry}, ptr, sync::{mpsc, OnceLock, Mutex, MutexGuard, Arc}};
 use std::thread::{self, JoinHandle};
 use std::fmt::{self, Debug, Formatter};
-use std::collections::hash_map::Entry;
 use windows::core::Owned;
 use windows::Win32::{Foundation::{LPARAM, LRESULT, WPARAM}, System::Threading::GetCurrentThreadId};
 use windows::Win32::UI::{
 	Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VK_TO_VSC_EX, VK_BROWSER_BACK, VK_LAUNCH_APP2, INPUT, SendInput,
 		KEYEVENTF_UNICODE, KEYEVENTF_KEYUP },
-	WindowsAndMessaging::{
-		WH_KEYBOARD_LL, WM_QUIT, LLKHF_UP, LLKHF_EXTENDED, LLKHF_INJECTED, MSG, KBDLLHOOKSTRUCT,
-		SetWindowsHookExW,GetMessageW, TranslateMessage, DispatchMessageW, CallNextHookEx, PostThreadMessageW}};
-
+	WindowsAndMessaging::{WH_KEYBOARD_LL, WH_MOUSE_LL, WM_QUIT, LLKHF_UP, LLKHF_EXTENDED, LLKHF_INJECTED, MSG,
+		LLMHF_INJECTED, MSLLHOOKSTRUCT, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE,
+		WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP, XBUTTON1, XBUTTON2,
+		KBDLLHOOKSTRUCT, SetWindowsHookExW,GetMessageW, TranslateMessage, DispatchMessageW, CallNextHookEx,
+		PostThreadMessageW}};
 
 #[derive(Debug)]
 pub struct Handler {
@@ -20,6 +21,8 @@ pub struct Handler {
 	suppressed: HashSet<Key>,
 	curr_h: Option<CurrHotkey>,
 	v_mods: Mods,
+	send_count: u8,
+	sender: mpsc::Sender<Vec<INPUT>>, // TODO: use Arc<Vec<INPUT>>?
 }
 
 #[derive(Debug)]
@@ -35,7 +38,7 @@ impl KeyMods {
 enum CurrHotkey {
 	Default(KeyMods),
 	Remap(KeyMods, KeyMods),
-	Unicode(KeyMods, Arc<Vec<INPUT>>),
+	Unicode(KeyMods, Arc<Vec<INPUT>>), // TODO: use just Vec<INPUT> if it's, anyways, copied?
 	Action(KeyMods, KeyEventNotifier)
 }
 	
@@ -48,6 +51,10 @@ pub fn wait() {
 		if let Some(h) = handle {
 			h.join().unwrap();
 		}
+		
+		let h = HANDLER.get().expect("handler should be set if worker is");
+		let mut g = h.lock().unwrap();
+		let _ = std::mem::replace(&mut *g, Handler::new());
 	}
 }
 
@@ -60,11 +67,15 @@ pub fn exit() {
 
 impl Handler {
 	pub fn new() -> Self {
+		let (placeholder, _) = mpsc::channel();
+		
 		Self {
 			hotkeys: HashMap::new(),
 			suppressed: HashSet::new(),
 			curr_h: None,
 			v_mods: Mods::NONE,
+			send_count: 0,
+			sender: placeholder
 		}
 	}
 	
@@ -75,7 +86,15 @@ impl Handler {
 		};
 	}
 	
-	pub fn start(self) {
+	pub fn start(mut self) {
+		let (tx, rx) = mpsc::channel::<Vec<INPUT>>();
+		let _ = thread::spawn(move || {
+			for inputs in rx {
+				unsafe { SendInput(&inputs, size_of::<INPUT>() as _) };	
+			}
+		});
+		self.sender = tx;
+		
 		HANDLER.set(Mutex::new(self)).expect("handler should not be set");
 		
 		let (tx, rx) = mpsc::channel::<u32>();
@@ -85,18 +104,11 @@ impl Handler {
 		WORKER.set(Mutex::new(Worker(Some(handle), thread_id))).expect("worker should not be set");
 	}
 	
-	unsafe extern "system" fn ll_keybd_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-		if code < 0 {
-			return unsafe { CallNextHookEx(None, code, wparam, lparam) };
-		}
-		
-		let s = unsafe { ptr::read(lparam.0 as *const KBDLLHOOKSTRUCT) };
-		
-		match s.dwExtraInfo {
-			CALL_NEXT => return unsafe { CallNextHookEx(None, code, wparam, lparam) },
-			_ => {}
-		};
-		
+	fn lock_handler() -> MutexGuard<'static, Handler> {
+		HANDLER.get().unwrap().try_lock().expect("handler should always be available")
+	}
+	
+	fn kb_get_key(s: &KBDLLHOOKSTRUCT) -> Option<(Key, bool)> {
 		let mut sc = s.scanCode as u16;
 		
 		if s.flags.contains(LLKHF_INJECTED) {
@@ -106,38 +118,190 @@ impl Handler {
 			if sc == 0 && matches!(s.vkCode as u16, VK_CONSUMER_BEGIN..=VK_CONSUMER_END) {
 				sc = unsafe { MapVirtualKeyW(s.vkCode, MAPVK_VK_TO_VSC_EX) } as u16;
 			} else {
-				return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+				return None;
 			}
 		} else if s.flags.contains(LLKHF_EXTENDED) && Key(sc) != Key::RSHIFT {
 			sc |= 0xE000;
 		}
 		
-		let pressed = !s.flags.contains(LLKHF_UP);
-		
-		if Self::handle_kb(Key(sc), pressed) {
-			LRESULT(1)
-		} else {
-			unsafe { CallNextHookEx(None, code, wparam, lparam) }
+		Some((Key(sc), !s.flags.contains(LLKHF_UP)))
+	}
+	
+	fn ms_get_key(wparam: WPARAM, data: u32) -> (Key, bool) {
+		match wparam.0 as u32 {
+			WM_LBUTTONDOWN => (Key::LBUTTON, true),
+			WM_LBUTTONUP   => (Key::LBUTTON, false),
+			WM_RBUTTONDOWN => (Key::RBUTTON, true),
+			WM_RBUTTONUP   => (Key::RBUTTON, false),
+			WM_MBUTTONDOWN => (Key::MBUTTON, true),
+			WM_MBUTTONUP   => (Key::MBUTTON, false),
+			
+			WM_XBUTTONDOWN if (data >> 16) == XBUTTON1 as _ => (Key::XBUTTON1, true),
+			WM_XBUTTONDOWN if (data >> 16) == XBUTTON2 as _ => (Key::XBUTTON2, true),
+			WM_XBUTTONUP   if (data >> 16) == XBUTTON1 as _ => (Key::XBUTTON1, false),
+			WM_XBUTTONUP   if (data >> 16) == XBUTTON2 as _ => (Key::XBUTTON2, false),
+			
+			WM_MOUSEWHEEL if (data as i32) > 0 => (Key::WH_UP, true),
+			WM_MOUSEWHEEL if (data as i32) < 0 => (Key::WH_DOWN, true),
+			
+			_ => unreachable!("mouse wparam match should be exhaustive: 0x{:X}, {}", wparam.0, data)
 		}
 	}
 	
-	fn handle_kb(key: Key, pressed: bool) -> bool {
-		let mut h = HANDLER.get().unwrap().lock().unwrap();
+	unsafe extern "system" fn ll_keybd_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+		if code < 0 {
+			return call_next(code, wparam, lparam);
+		}
+		
+		let mut s = unsafe { ptr::read(lparam.0 as *const KBDLLHOOKSTRUCT) };
+		let mut h: Option<MutexGuard<'_, Handler>> = None;
+		
+		match s.dwExtraInfo {
+			CALL_NEXT => return call_next(code, wparam, lparam),
+			CALL_NEXT_END => {
+				Self::lock_handler().send_count -= 1;
+				return call_next(code, wparam, lparam);
+			},
+			CACHED_EVENT => s.flags &= !LLKHF_INJECTED,
+			_ => {
+				let _h = Self::lock_handler();
+				if _h.send_count != 0 {
+					let Some((key, pressed)) = Self::kb_get_key(&s) else {
+						return call_next(code, wparam, lparam); // TODO: block injected key?
+					};
+					if !pressed {
+						_h.sender.send(vec![INPUT::keybd_up(key, CACHED_EVENT)]).unwrap();
+					}
+					return LRESULT(1);
+				}
+				h = Some(_h);
+			}
+		}
+		
+		let Some((key, pressed)) = Self::kb_get_key(&s) else {
+			return call_next(code, wparam, lparam); // TODO: block injected key?
+		};
+		
+		let mut h = h.take().unwrap_or_else(Self::lock_handler);
+		
+		if Self::handle_kb(key, pressed, &mut h) {
+			LRESULT(1)
+		} else {
+			call_next(code, wparam, lparam)
+		}
+	}
+	
+	unsafe extern "system" fn ll_mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+		if code < 0 || wparam.0 as u32 == WM_MOUSEMOVE {
+			return call_next(code, wparam, lparam);
+		}
+		
+		let mut s = unsafe { ptr::read(lparam.0 as *const MSLLHOOKSTRUCT) };
+		let mut h: Option<MutexGuard<'_, Handler>> = None;
+		
+		match s.dwExtraInfo {
+			CALL_NEXT => return call_next(code, wparam, lparam),
+			CALL_NEXT_END => {
+				Self::lock_handler().send_count -= 1;
+				return call_next(code, wparam, lparam);
+			},
+			CACHED_EVENT => s.flags &= !LLMHF_INJECTED,
+			_ => {
+				let _h = Self::lock_handler();
+				if _h.send_count != 0 {
+					let (key, pressed) = Self::ms_get_key(wparam, s.mouseData);
+					if !pressed {
+						_h.sender.send(vec![INPUT::mouse_up(key, CACHED_EVENT)]).unwrap();
+					}
+					return LRESULT(1);
+				}
+				h = Some(_h);
+			}
+		}
+		
+		if s.flags & LLMHF_INJECTED != 0 {
+			return call_next(code, wparam, lparam);
+		}
+		
+		let (key, pressed) = Self::ms_get_key(wparam, s.mouseData);
+		let mut h = h.take().unwrap_or_else(Self::lock_handler);
+		
+		if Self::handle_ms(key, pressed, &mut h) {
+			LRESULT(1)
+		} else {
+			return call_next(code, wparam, lparam);
+		}
+	}
+	
+	fn handle_kb(key: Key, pressed: bool, h: &mut MutexGuard<'_, Handler>) -> bool {
 		let mod_bit = Self::get_mod(key);
 		
 		if pressed {
-			if Self::kb_key_down(key, mod_bit, &mut h) {
+			if Self::kb_key_down(key, mod_bit, h) {
 				return true;
 			}
 			h.v_mods |= mod_bit;
 		} else {
-			if Self::kb_key_up(key, mod_bit, &mut h) {
+			if Self::kb_key_up(key, mod_bit, h) {
 				return true;
 			}
 			h.v_mods &= !mod_bit;
 		}
 		
 		false
+	}
+	
+	fn handle_ms(key: Key, pressed: bool, h: &mut MutexGuard<'_, Handler>) -> bool {
+		if pressed {
+			if key.is_mouse_wheel() {
+				Self::ms_wheel(key, h)
+			} else {
+				Self::kb_key_down(key, Mods::NONE, h)
+			}
+		} else {
+			Self::kb_key_up(key, Mods::NONE, h)
+		}
+	}
+	
+	fn ms_wheel(key: Key, h: &mut MutexGuard<'_, Handler>) -> bool {
+		if let Some(_) = &h.curr_h {
+			return false; // TODO what?
+		}
+		
+		let entry = KeyMods::new(h.v_mods, key);
+		
+		let Some(&f) = h.hotkeys.get(&(entry.mods, key)) else {
+			return false;
+		};
+		
+		match f() {
+			Hotkey::Default => false,
+			Hotkey::Suppress => true,
+			Hotkey::Remap(r_mods, r_key) => {
+				let remap_mod_bit = Self::get_mod(r_key);
+				let entry_mods = entry.mods & !(r_mods | remap_mod_bit);
+				let remap_mods = r_mods & !entry.mods;
+				
+				let is_wheel = r_key.is_mouse_wheel();
+				let should_mask = Self::should_mask(entry_mods);
+				let size = ((entry_mods | remap_mods).count_ones() + (should_mask as u32 * 2)) * 2 + 1 + (!is_wheel as u32 * 1);
+				
+				let inputs = InputBuilder::with_capacity(size as _)
+					.mods_up_masked(entry_mods, should_mask)
+					.mods_down(remap_mods)
+					.key_down(r_key)
+					.key_up_if(r_key, !is_wheel)
+					.mods_up(remap_mods)
+					.mods_down_masked(entry_mods, should_mask)
+					.build();
+				
+				h.send_count += 1;
+				h.sender.send(inputs).unwrap();
+				true
+			},
+			Hotkey::Unicode(_) => todo!(),
+			Hotkey::Action(_) => todo!()
+		}
 	}
 	
 	fn kb_key_down(key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool {
@@ -204,34 +368,34 @@ impl Handler {
 	}
 	
 	fn kb_remap(entry: KeyMods, remap: KeyMods, h: &mut MutexGuard<'_, Handler>) -> bool {
-		h.curr_h = Some(CurrHotkey::Remap(entry, remap));
-		
 		let remap_mod_bit = Self::get_mod(remap.key);
 		let mods_to_release = entry.mods & !(remap.mods | remap_mod_bit);
 		let mods_to_press = remap.mods & !entry.mods;
 		
-		h.v_mods = remap.mods | remap_mod_bit;
-		
 		let should_mask = Self::should_mask(mods_to_release);
 		let size = (mods_to_release | mods_to_press).count_ones() + (should_mask as u32 * 2) + 1;
 		
-		KeySender::with_capacity(size as usize)
+		let inputs = InputBuilder::with_capacity(size as _)
 			.mods_up_masked(mods_to_release, should_mask)
 			.mods_down(mods_to_press)
 			.key_down(remap.key)
-			.send();
+			.build();
+		
+		h.v_mods = remap.mods | remap_mod_bit;
+		h.curr_h = Some(CurrHotkey::Remap(entry, remap));
+		h.send_count += 1;
+		h.sender.send(inputs).unwrap();
 		
 		true
 	}
 	
 	fn kb_remap_up(entry: KeyMods, remap: KeyMods, key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool {
 		if key == entry.key {
-			h.curr_h = None;
-			
 			let key_to_release = remap.key;
 			let mods_to_release = remap.mods & !entry.mods;
 			let mods_to_restore = entry.mods & !remap.mods;
 			
+			h.curr_h = None;
 			h.v_mods = (h.v_mods & !(mods_to_release | Self::get_mod(key_to_release))) | mods_to_restore;
 			
 			let should_mask = Self::should_mask(mods_to_restore);
@@ -239,22 +403,24 @@ impl Handler {
 			let size = (mods_to_release | mods_to_restore).count_ones() + (should_mask as u32 * 2) + (!is_wheel as u32 * 1);
 			
 			if size != 0 {
-				KeySender::with_capacity(size as usize)
+				let inputs = InputBuilder::with_capacity(size as _)
 					.key_up_if(key_to_release, !is_wheel)
 					.mods_up(mods_to_release)
 					.mods_down_masked(mods_to_restore, should_mask)
-					.send();
+					.build();
+				
+				h.send_count += 1;
+				h.sender.send(inputs).unwrap();
 			}
 			
 			return true;
 		}
 		
 		if entry.mods.contains(mod_bit) {
-			h.curr_h = None;
-			
 			let key_to_release = remap.key;
 			let mods_to_release = remap.mods;
 			
+			h.curr_h = None;
 			h.v_mods &= !(mods_to_release | Self::get_mod(key_to_release));
 			
 			Self::ignore_keys(entry.mods & !mod_bit, entry.key, h);
@@ -263,10 +429,13 @@ impl Handler {
 			let size = mods_to_release.count_ones() + (!is_wheel as u32 * 1);
 			
 			if size != 0 {
-				KeySender::with_capacity(size as usize)
+				let inputs = InputBuilder::with_capacity(size as _)
 					.key_up_if(key_to_release, !is_wheel)
 					.mods_up(mods_to_release)
-					.send();
+					.build();
+				
+				h.send_count += 1;
+				h.sender.send(inputs).unwrap();
 			}
 			
 			return true;
@@ -286,7 +455,15 @@ impl Handler {
 			return if key == key_to_repeat {
 				false
 			} else {
-				KeySender::send_key_down(key_to_repeat);
+				let input = if key_to_repeat.is_mouse_key() {
+					INPUT::mouse_down(key_to_repeat, CALL_NEXT_END)
+				} else {
+					INPUT::keybd_down(key_to_repeat, CALL_NEXT_END)
+				};
+				
+				h.send_count += 1;
+				h.sender.send(vec![input]).unwrap();
+				
 				true
 			};
 		}
@@ -318,11 +495,14 @@ impl Handler {
 		let size = (mods_to_release | mods_to_restore).count_ones() + (should_mask as u32 * 2) + (!is_wheel as u32 * 1);
 		
 		if size != 0 {
-			KeySender::with_capacity(size as usize)
+			let inputs = InputBuilder::with_capacity(size as _)
 				.key_up_if(key_to_release, !is_wheel)
 				.mods_up(mods_to_release)
 				.mods_down_masked(mods_to_restore, should_mask)
-				.send();
+				.build();
+			
+			h.send_count += 1;
+			h.sender.send(inputs).unwrap();
 		}
 		
 		Self::map_hotkey(f, KeyMods::new(h.v_mods, key), h)
@@ -355,10 +535,10 @@ impl Handler {
 		if !mods_to_release.is_none() {
 			let should_mask = Self::should_mask(mods_to_release);
 			let size = mods_to_release.count_ones() + (should_mask as u32 * 2);
-			KeySender::with_capacity(size as usize).mods_up_masked(mods_to_release, should_mask).send();
+			InputBuilder::with_capacity(size as usize).mods_up_masked(mods_to_release, should_mask).send(); // TODO: use sender
 		}
 		
-		unsafe { SendInput(&inputs, size_of::<INPUT>() as i32); }
+		unsafe { SendInput(&inputs, size_of::<INPUT>() as i32); } // TODO: use sender
 		true
 	}
 	
@@ -380,7 +560,7 @@ impl Handler {
 		if !mods_to_restore.is_none() {
 			let should_mask = Self::should_mask(mods_to_restore);
 			let size = mods_to_restore.count_ones() + (should_mask as u32 * 2);
-			KeySender::with_capacity(size as usize).mods_down_masked(mods_to_restore, should_mask).send();
+			InputBuilder::with_capacity(size as usize).mods_down_masked(mods_to_restore, should_mask).send(); // TOOD: use sender
 		}
 		
 		true
@@ -390,7 +570,7 @@ impl Handler {
 		entry: KeyMods, inputs: Arc<Vec<INPUT>>, key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool
 	{
 		if key == entry.key {
-			unsafe { SendInput(&inputs, size_of::<INPUT>() as i32); }
+			unsafe { SendInput(&inputs, size_of::<INPUT>() as i32); } // TODO: use sender
 			return true;
 		}
 		
@@ -411,7 +591,7 @@ impl Handler {
 		if !mods_to_restore.is_none() {
 			let should_mask = Self::should_mask(mods_to_restore);
 			let size = mods_to_restore.count_ones() + (should_mask as u32 * 2);
-			KeySender::with_capacity(size as usize).mods_down_masked(mods_to_restore, should_mask).send();
+			InputBuilder::with_capacity(size as usize).mods_down_masked(mods_to_restore, should_mask).send(); // TODO: use sender
 		}
 		
 		Self::map_hotkey(f, KeyMods::new(h.v_mods, key), h)
@@ -487,9 +667,8 @@ impl Handler {
 		tx.send(thread_id).unwrap();
 		drop(tx);
 		
-		let _keybd = unsafe {
-			Owned::new(SetWindowsHookExW(WH_KEYBOARD_LL, Some(Self::ll_keybd_proc), None, 0).unwrap())
-		};
+		let _keybd = unsafe { Owned::new(SetWindowsHookExW(WH_KEYBOARD_LL, Some(Self::ll_keybd_proc), None, 0).unwrap()) };
+		let _mouse = unsafe { Owned::new(SetWindowsHookExW(WH_MOUSE_LL, Some(Self::ll_mouse_proc), None, 0).unwrap()) };
 		
 		let mut msg = MSG::default();
 		
@@ -506,6 +685,10 @@ impl Handler {
 			}
 		}
 	}
+}
+
+fn call_next(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+	unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
 impl Debug for CurrHotkey {
