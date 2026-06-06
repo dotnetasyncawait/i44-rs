@@ -25,7 +25,7 @@ pub struct Handler {
 }
 
 #[derive(Debug)]
-struct Worker(Option<JoinHandle<()>>, u32);
+struct Worker(Option<JoinHandle<()>>, u32, i8);
 
 #[derive(Debug, Clone, Copy)]
 struct KeyMods { mods: Mods, key: Key }
@@ -46,7 +46,7 @@ enum CurrHotkey {
 static HANDLER: OnceLock<Mutex<Handler>> = OnceLock::new();
 static WORKER: OnceLock<Mutex<Worker>> = OnceLock::new();
 
-pub fn wait() {
+pub fn wait() -> i8 {
 	let Some(worker) = WORKER.get() else {
 		unreachable!("should not be called before initialization");
 	};
@@ -60,15 +60,20 @@ pub fn wait() {
 			.lock().unwrap();
 	
 		let _ = std::mem::replace(&mut *h, Handler::new());
+		
+		worker.lock().unwrap().2 // ret_value
+	} else {
+		0
 	}
 }
 
-pub fn exit() {
+pub fn exit(ret_value: i8) {
 	if let Some(worker) = WORKER.get() {
 		let mut w = worker.lock().unwrap();
 		let thread_id = w.1;
 		if thread_id != 0 {
 			w.1 = 0;
+			w.2 = ret_value;
 			unsafe { PostThreadMessageW(thread_id, WM_QUIT, WPARAM(0), LPARAM(0)).unwrap() };
 		}
 	}
@@ -110,7 +115,7 @@ impl Handler {
 		let handle = thread::spawn(move || Self::mq_handler(tx));
 		
 		let thread_id = rx.recv().unwrap();
-		WORKER.set(Mutex::new(Worker(Some(handle), thread_id))).expect("worker should not be set");
+		WORKER.set(Mutex::new(Worker(Some(handle), thread_id, 0))).expect("worker should not be set");
 	}
 	
 	fn lock_handler() -> MutexGuard<'static, Handler> {

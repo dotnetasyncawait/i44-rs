@@ -1,14 +1,22 @@
 pub mod input;
 
 use input::{handler::{self, Handler}, hotkey::Hotkey, mods::Mods, keys::Key};
+use std::{env, process};
+
+#[derive(Clone, Copy, Debug)]
+pub enum ExitReason {
+	Shutdown,
+	Restart
+}
 
 pub struct App {
-	h: Option<Handler>
+	h: Option<Handler>,
+	on_exit: Vec<fn(ExitReason)>,
 }
 
 impl App {
 	pub fn new() -> Self {
-		Self { h: Some(Handler::new()) }
+		Self { h: Some(Handler::new()), on_exit: Vec::default() }
 	}
 	
 	pub fn hotkey(mut self, mods: Mods, key: Key, f: fn() -> Hotkey) -> Self {
@@ -16,12 +24,40 @@ impl App {
 		self
 	}
 	
+	pub fn on_exit(mut self, f: fn(ExitReason)) -> Self {
+		self.on_exit.push(f);
+		self
+	}
+	
 	pub fn run(mut self) {
 		self.h.take().unwrap().start();
-		handler::wait();
+		
+		let exit_reason = match handler::wait() {
+			0 => ExitReason::Shutdown,
+			1 => ExitReason::Restart,
+			_ => unreachable!()
+		};
+		
+		for f in self.on_exit {
+			f(exit_reason);
+		}
+		
+		if let ExitReason::Restart = exit_reason {
+			let exe = env::current_exe().unwrap();
+			let _ = process::Command::new(exe)
+				.args(env::args().skip(1))
+				.spawn()
+				.expect("failed to launch itself");
+		}
+		
+		process::exit(0);
 	}
 	
 	pub fn exit() {
-		handler::exit();
+		handler::exit(0);
+	}
+	
+	pub fn restart() {
+		handler::exit(1);
 	}
 }
