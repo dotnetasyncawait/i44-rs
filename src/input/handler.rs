@@ -1,4 +1,4 @@
-use super::{hotkey::Hotkey, mods::Mods, keys::Key, key_sender::InputBuilder, extensions::InputExt};
+use super::{hotkey::Hotkey, mods::Mods, keys::Key, input_builder::InputBuilder, extensions::InputExt};
 use crate::misc::error::Error;
 use super::constants::{CALL_NEXT, CALL_NEXT_END, CACHED_EVENT};
 use super::key_event::{KeyEvent, KeyEventNotifier};
@@ -46,6 +46,8 @@ enum CurrHotkey {
 	
 static HANDLER: OnceLock<Mutex<Handler>> = OnceLock::new();
 static WORKER: OnceLock<Mutex<Worker>> = OnceLock::new();
+
+const HANDLED: LRESULT = LRESULT(1);
 
 pub fn wait() -> i8 {
 	let Some(worker) = WORKER.get() else {
@@ -132,10 +134,15 @@ impl Handler {
 			
 			if sc == 0 && matches!(s.vkCode as u16, VK_CONSUMER_BEGIN..=VK_CONSUMER_END) {
 				sc = unsafe { MapVirtualKeyW(s.vkCode, MAPVK_VK_TO_VSC_EX) } as u16;
-			} else {
+				return Some((Key(sc), !s.flags.contains(LLKHF_UP)));
+			}
+			
+			if s.dwExtraInfo != CACHED_EVENT {
 				return None;
 			}
-		} else if s.flags.contains(LLKHF_EXTENDED) && Key(sc) != Key::RSHIFT {
+		}
+		
+		if s.flags.contains(LLKHF_EXTENDED) && Key(sc) != Key::RSHIFT {
 			sc |= 0xE000;
 		}
 		
@@ -170,12 +177,11 @@ impl Handler {
 			return call_next(code, wparam, lparam);
 		}
 		
-		let mut s = unsafe { ptr::read(lparam.0 as *const KBDLLHOOKSTRUCT) };
-		let mut h: Option<MutexGuard<'_, Handler>> = None;
-		
 		// IMPORTANT: drop locked handle before calling the next hook.
 		// CallNextHookEx can pick up a message from the message queue and re-enter,
 		// or execute Mouse hook (which will try to take the lock and panic).
+		
+		let s = unsafe { ptr::read(lparam.0 as *const KBDLLHOOKSTRUCT) };
 		
 		match s.dwExtraInfo {
 			CALL_NEXT => return call_next(code, wparam, lparam),
@@ -183,32 +189,23 @@ impl Handler {
 				Self::lock_handler().send_count -= 1;
 				return call_next(code, wparam, lparam);
 			},
-			CACHED_EVENT => s.flags &= !LLKHF_INJECTED,
-			_ => {
-				let _h = Self::lock_handler();
-				if _h.send_count != 0 {
-					let Some((key, pressed)) = Self::kb_get_key(&s) else {
-						drop(_h);
-						return call_next(code, wparam, lparam); // TODO: block injected key?
-					};
-					if !pressed {
-						_h.sender.send(vec![INPUT::keybd_up(key, CACHED_EVENT)]).unwrap();
-					}
-					return LRESULT(1);
-				}
-				h = Some(_h);
-			}
+			_ => {}
 		}
 		
 		let Some((key, pressed)) = Self::kb_get_key(&s) else {
-			drop(h);
-			return call_next(code, wparam, lparam); // TODO: block injected key?
+			return HANDLED; // injected key
 		};
 		
-		let mut h = h.take().unwrap_or_else(Self::lock_handler);
+		let mut h = Self::lock_handler();
+		if h.send_count != 0 {
+			if !pressed {
+				h.sender.send(vec![INPUT::keybd_up(key, CACHED_EVENT)]).unwrap();
+			}
+			return HANDLED;
+		}
 		
 		if Self::handle_kb(key, pressed, &mut h) {
-			LRESULT(1)
+			HANDLED
 		} else {
 			drop(h);
 			call_next(code, wparam, lparam)
@@ -220,12 +217,7 @@ impl Handler {
 			return call_next(code, wparam, lparam);
 		}
 		
-		let mut s = unsafe { ptr::read(lparam.0 as *const MSLLHOOKSTRUCT) };
-		let mut h: Option<MutexGuard<'_, Handler>> = None;
-		
-		if s.flags & LLMHF_INJECTED != 0 {
-			return call_next(code, wparam, lparam);
-		}
+		let s = unsafe { ptr::read(lparam.0 as *const MSLLHOOKSTRUCT) };
 		
 		match s.dwExtraInfo {
 			CALL_NEXT => return call_next(code, wparam, lparam),
@@ -233,25 +225,25 @@ impl Handler {
 				Self::lock_handler().send_count -= 1;
 				return call_next(code, wparam, lparam);
 			},
-			CACHED_EVENT => s.flags &= !LLMHF_INJECTED,
-			_ => {
-				let _h = Self::lock_handler();
-				if _h.send_count != 0 {
-					let (key, pressed) = Self::ms_get_key(wparam, s.mouseData);
-					if !pressed {
-						_h.sender.send(vec![INPUT::mouse_up(key, CACHED_EVENT)]).unwrap();
-					}
-					return LRESULT(1);
-				}
-				h = Some(_h);
-			}
+			_ => {}
+		}
+		
+		if s.flags & LLMHF_INJECTED != 0 && s.dwExtraInfo != CACHED_EVENT {
+			return HANDLED;
 		}
 		
 		let (key, pressed) = Self::ms_get_key(wparam, s.mouseData);
-		let mut h = h.take().unwrap_or_else(Self::lock_handler);
+		
+		let mut h = Self::lock_handler();
+		if h.send_count != 0 {
+			if !pressed {
+				h.sender.send(vec![INPUT::mouse_up(key, CACHED_EVENT)]).unwrap();
+			}
+			return HANDLED;
+		}
 		
 		if Self::handle_ms(key, pressed, &mut h) {
-			LRESULT(1)
+			HANDLED
 		} else {
 			call_next(code, wparam, lparam)
 		}

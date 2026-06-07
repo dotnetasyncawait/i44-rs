@@ -3,6 +3,6 @@ pub mod keys;
 pub mod hotkey;
 pub(super) mod handler;
 mod extensions;
-mod key_sender;
+mod input_builder;
 mod constants;
 pub mod key_event;
