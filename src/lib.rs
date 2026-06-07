@@ -1,5 +1,7 @@
 pub mod input;
+pub mod misc;
 
+use crate::misc::error::Error;
 use input::{handler::{self, Handler}, hotkey::Hotkey, mods::Mods, keys::Key};
 use std::{env, process};
 
@@ -19,7 +21,7 @@ impl App {
 		Self { h: Some(Handler::new()), on_exit: Vec::default() }
 	}
 	
-	pub fn hotkey(mut self, mods: Mods, key: Key, f: fn() -> Hotkey) -> Self {
+	pub fn hotkey(mut self, mods: Mods, key: Key, f: fn() -> Result<Hotkey, Error>) -> Self {
 		self.h.as_mut().unwrap().hotkey(mods, key, f);
 		self
 	}

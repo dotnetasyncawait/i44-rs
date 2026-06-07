@@ -1,4 +1,5 @@
 use super::{hotkey::Hotkey, mods::Mods, keys::Key, key_sender::InputBuilder, extensions::InputExt};
+use crate::misc::error::Error;
 use super::constants::{CALL_NEXT, CALL_NEXT_END, CACHED_EVENT};
 use super::key_event::{KeyEvent, KeyEventNotifier};
 use std::{collections::{HashMap, HashSet, hash_map::Entry}, ptr, sync::{mpsc, OnceLock, Mutex, MutexGuard}};
@@ -16,7 +17,7 @@ use windows::Win32::UI::{
 
 #[derive(Debug)]
 pub struct Handler {
-	hotkeys: HashMap<(Mods, Key), fn() -> Hotkey>,
+	hotkeys: HashMap<(Mods, Key), fn() -> Result<Hotkey, Error>>,
 	suppressed: HashSet<Key>,
 	curr_h: Option<CurrHotkey>,
 	v_mods: Mods,
@@ -93,7 +94,7 @@ impl Handler {
 		}
 	}
 	
-	pub fn hotkey(&mut self, mods: Mods, key: Key, f: fn() -> Hotkey) {
+	pub fn hotkey(&mut self, mods: Mods, key: Key, f: fn() -> Result<Hotkey, Error>) {
 		match self.hotkeys.entry((mods, key)) {
 			Entry::Occupied(o) => panic!("hotkey {:?} already exists", o.key()),
 			Entry::Vacant(v) => v.insert_entry(f),
@@ -297,7 +298,15 @@ impl Handler {
 			return false;
 		};
 		
-		match f() {
+		let hotkey = match f() {
+			Ok(hotkey) => hotkey,
+			Err(err) => {
+				println!("{err:?} ({entry:?})"); // TODO: display the error with a window
+				return true;
+			}
+		};
+		
+		match hotkey {
 			Hotkey::Default => false,
 			Hotkey::Suppress => true,
 			Hotkey::Remap(r_mods, r_key) => {
@@ -350,7 +359,12 @@ impl Handler {
 				// It could be fixed by notifying back from the runner thread (once the action is run to completion),
 				// but it would require adding a new field to the Handler/CurrHotkey::Action, specifically for this case.
 				// Since actions on wheel keys are rare (not any for now), it should not be a problem.
-				thread::spawn(move || action(event));
+				thread::spawn(move || {
+					if let Err(err) = action(event) {
+						println!("From action: {err:?}; ({entry:?})"); // TODO: display the error with a window
+					}
+				});
+				
 				true
 			}
 		}
@@ -656,11 +670,16 @@ impl Handler {
 		Self::map_hotkey(f, KeyMods::new(h.v_mods, key), h)
 	}
 	
-	fn kb_action(entry: KeyMods, action: fn(KeyEvent), h: &mut MutexGuard<'_, Handler>) -> bool {
+	fn kb_action(entry: KeyMods, action: fn(KeyEvent) -> Result<(), Error>, h: &mut MutexGuard<'_, Handler>) -> bool {
 		let (event, notf) = KeyEvent::new();
 		h.curr_h = Some(CurrHotkey::Action(entry, notf));
 		
-		thread::spawn(move || action(event)); // TODO: h.curr_h = None here?
+		thread::spawn(move || {
+			if let Err(err) = action(event) {
+				println!("From action: {err:?}; ({entry:?})"); // TODO: display the error with a window
+			}
+		});
+		
 		true
 	}
 	
@@ -678,13 +697,19 @@ impl Handler {
 		key == entry.key || entry.mods.contains(mod_bit)
 	}
 	
-	fn map_hotkey(f: fn() -> Hotkey, entry: KeyMods, h: &mut MutexGuard<'_, Handler>) -> bool {
+	fn map_hotkey(f: fn() -> Result<Hotkey, Error>, entry: KeyMods, h: &mut MutexGuard<'_, Handler>) -> bool {
 		match f() {
-			Hotkey::Default => Self::kb_default(entry, h),
-			Hotkey::Suppress => Self::kb_suppress(entry.key, h),
-			Hotkey::Remap(mods, key) => Self::kb_remap(entry, KeyMods::new(mods, key), h),
-			Hotkey::Unicode(str) => Self::kb_unicode(entry, str, h),
-			Hotkey::Action(action) => Self::kb_action(entry, action, h)
+			Ok(hotkey) => match hotkey {
+				Hotkey::Default => Self::kb_default(entry, h),
+				Hotkey::Suppress => Self::kb_suppress(entry.key, h),
+				Hotkey::Remap(mods, key) => Self::kb_remap(entry, KeyMods::new(mods, key), h),
+				Hotkey::Unicode(str) => Self::kb_unicode(entry, str, h),
+				Hotkey::Action(action) => Self::kb_action(entry, action, h)
+			},
+			Err(err) => {
+				println!("{err:?} ({entry:?})"); // TODO: display the error with a window
+				true
+			}
 		}
 	}
 	
