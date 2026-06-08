@@ -1,5 +1,6 @@
 pub mod input;
 pub mod misc;
+pub mod hid;
 
 use crate::misc::error::Error;
 use input::{handler::{self, Handler}, hotkey::Hotkey, mods::Mods, keys::Key};
