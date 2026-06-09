@@ -1,6 +1,6 @@
-use super::{device::DeviceInfo, error::{HidError, Win32ErrorExt}, device::{DevicePath, HidDevice}};
+use super::{device::{DeviceInfo, DevicePath}, error::{HidError, Win32ErrorExt}};
 use windows::core::{Error, HRESULT, Owned, PCWSTR};
-use std::{mem, sync::Arc};
+use std::mem;
 use windows::Win32::{
 	Devices::DeviceAndDriverInstallation::{DIGCF_DEVICEINTERFACE, DIGCF_PRESENT, SP_DEVICE_INTERFACE_DATA,
 		SP_DEVICE_INTERFACE_DETAIL_DATA_W, SetupDiEnumDeviceInterfaces, SetupDiGetClassDevsW,
@@ -22,7 +22,7 @@ pub struct HidDeviceIter {
 }
 
 impl Iterator for HidDeviceIter {
-	type Item = Result<HidDevice, HidError>;
+	type Item = Result<DeviceInfo, HidError>;
 
 	fn next(&mut self) -> Option<Self::Item> {
 		if self.index == self.paths.len() {
@@ -36,7 +36,7 @@ impl Iterator for HidDeviceIter {
 	}
 }
 
-fn get_device(path: DevicePath) -> Result<HidDevice, HidError> {
+fn get_device(path: DevicePath) -> Result<DeviceInfo, HidError> {
 	let handle = unsafe { 
 		Owned::new(CreateFileW(
 			PCWSTR(path.as_ptr()),
@@ -95,7 +95,7 @@ fn get_device(path: DevicePath) -> Result<HidDevice, HidError> {
 		product
 	};	
 	
-	return Ok(HidDevice { info: Arc::new(info) });
+	return Ok(info);
 	
 	fn get_str(buff: &mut [u16]) -> String {
 		let index = buff.iter().position(|&ch| ch == 0).expect("buffer should be null-terminated");

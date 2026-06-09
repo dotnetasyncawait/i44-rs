@@ -3,6 +3,9 @@ use windows::core::Error;
 #[derive(Debug)]
 pub enum HidError {
 	Win32(Error),
+	DeviceNotConnected,
+	DeviceInUse,
+	Timeout,
 	Other(String)
 }
 
