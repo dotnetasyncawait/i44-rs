@@ -4,6 +4,7 @@ pub mod hid;
 pub mod common;
 
 use common::error::Error;
+use misc::mode;
 use input::{handler::{self, Handler}, hotkey::Hotkey, mods::Mods, keys::Key};
 use std::{env, process};
 
@@ -36,11 +37,15 @@ impl App {
 	pub fn run(mut self) {
 		self.h.take().unwrap().start();
 		
+		mode::start();
+		
 		let exit_reason = match handler::wait() {
 			0 => ExitReason::Shutdown,
 			1 => ExitReason::Restart,
 			_ => unreachable!()
 		};
+		
+		mode::exit();
 		
 		for f in self.on_exit {
 			f(exit_reason);
