@@ -29,6 +29,11 @@ impl App {
 		self
 	}
 	
+	pub fn hotkey_exempt(mut self, mods: Mods, key: Key, f: fn() -> Result<Hotkey, Error>) -> Self {
+		self.h.as_mut().unwrap().hotkey_exempt(mods, key, f);
+		self
+	}
+	
 	pub fn on_exit(mut self, f: fn(ExitReason)) -> Self {
 		self.on_exit.push(f);
 		self
@@ -64,6 +69,14 @@ impl App {
 	
 	pub fn exit() {
 		handler::exit(0);
+	}
+	
+	pub fn suspend(state: bool) {
+		handler::suspend(state);
+	}
+	
+	pub fn suspend_togg() -> bool {
+		handler::suspend_togg()
 	}
 	
 	pub fn restart() {

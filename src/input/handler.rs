@@ -3,7 +3,7 @@ use crate::common::error::Error;
 use super::constants::{CALL_NEXT, CALL_NEXT_END, CACHED_EVENT};
 use super::key_event::{KeyEvent, KeyEventNotifier};
 use std::{collections::{HashMap, HashSet, hash_map::Entry}, ptr, sync::{mpsc, OnceLock, Mutex, MutexGuard}};
-use std::thread::{self, JoinHandle};
+use std::{sync::atomic::{AtomicBool, Ordering}, thread::{self, JoinHandle}};
 use std::fmt::{self, Debug, Formatter};
 use windows::core::Owned;
 use windows::Win32::{Foundation::{LPARAM, LRESULT, WPARAM}, System::Threading::GetCurrentThreadId};
@@ -17,7 +17,7 @@ use windows::Win32::UI::{
 
 #[derive(Debug)]
 pub struct Handler {
-	hotkeys: HashMap<(Mods, Key), fn() -> Result<Hotkey, Error>>,
+	hotkeys: HashMap<KeyMods, HotkeyHandler>,
 	suppressed: HashSet<Key>,
 	curr_h: Option<CurrHotkey>,
 	v_mods: Mods,
@@ -25,13 +25,25 @@ pub struct Handler {
 	sender: mpsc::Sender<Vec<INPUT>>, // TODO: use Arc<Vec<INPUT>>?
 }
 
+#[derive(Debug, Clone, Copy)]
+struct HotkeyHandler {
+	func: fn() -> Result<Hotkey, Error>,
+	exempt: bool,
+}
+
+impl HotkeyHandler {
+	fn new(f: fn() -> Result<Hotkey, Error>, exempt: bool) -> Self {
+		Self { func: f, exempt }
+	}
+}
+
 #[derive(Debug)]
 struct Worker(Option<JoinHandle<()>>, u32, i8);
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct KeyMods { mods: Mods, key: Key }
 
-impl KeyMods { 
+impl KeyMods {
 	fn new(mods: Mods, key: Key) -> Self { Self { mods, key } }
 }
 
@@ -46,6 +58,7 @@ enum CurrHotkey {
 	
 static HANDLER: OnceLock<Mutex<Handler>> = OnceLock::new();
 static WORKER: OnceLock<Mutex<Worker>> = OnceLock::new();
+static SUSPENDED: AtomicBool = AtomicBool::new(false);
 
 const HANDLED: LRESULT = LRESULT(1);
 
@@ -82,6 +95,14 @@ pub fn exit(ret_value: i8) {
 	}
 }
 
+pub fn suspend(state: bool) {
+	SUSPENDED.store(state, Ordering::Relaxed);
+}
+
+pub fn suspend_togg() -> bool {
+	!SUSPENDED.fetch_not(Ordering::Relaxed)
+}
+
 impl Handler {
 	pub fn new() -> Self {
 		let (placeholder, _) = mpsc::channel();
@@ -97,9 +118,17 @@ impl Handler {
 	}
 	
 	pub fn hotkey(&mut self, mods: Mods, key: Key, f: fn() -> Result<Hotkey, Error>) {
-		match self.hotkeys.entry((mods, key)) {
+		self.hotkey_inner(KeyMods::new(mods, key), f, false);
+	}
+	
+	pub fn hotkey_exempt(&mut self, mods: Mods, key: Key, f: fn() -> Result<Hotkey, Error>) {
+		self.hotkey_inner(KeyMods::new(mods, key), f, true);
+	}
+	
+	fn hotkey_inner(&mut self, entry: KeyMods, f: fn() -> Result<Hotkey, Error>, exempt: bool) {
+		match self.hotkeys.entry(entry) {
 			Entry::Occupied(o) => panic!("hotkey {:?} already exists", o.key()),
-			Entry::Vacant(v) => v.insert_entry(f),
+			Entry::Vacant(v) => v.insert_entry(HotkeyHandler::new(f, exempt)),
 		};
 	}
 	
@@ -286,11 +315,11 @@ impl Handler {
 		
 		let entry = KeyMods::new(h.v_mods, key);
 		
-		let Some(&f) = h.hotkeys.get(&(entry.mods, key)) else {
+		let Some(hh) = Self::get_hotkey(entry, h) else {
 			return false;
 		};
 		
-		let hotkey = match f() {
+		let hotkey = match (hh.func)() {
 			Ok(hotkey) => hotkey,
 			Err(err) => {
 				println!("{err:?} ({entry:?})"); // TODO: display the error with a window
@@ -376,8 +405,10 @@ impl Handler {
 			};
 		}
 		
-		if let Some(&f) = h.hotkeys.get(&(h.v_mods, key)) {
-			Self::map_hotkey(f, KeyMods::new(h.v_mods, key), h)
+		let entry = KeyMods::new(h.v_mods, key);
+		
+		if let Some(hh) = Self::get_hotkey(entry, h) {
+			Self::map_hotkey(hh.func, entry, h)
 		} else {
 			false
 		}
@@ -534,18 +565,18 @@ impl Handler {
 			return false;
 		}
 		
-		let ph_mods = h.v_mods & !remap.mods | entry.mods;
+		let ph_entry = KeyMods::new(h.v_mods & !remap.mods | entry.mods, key);
 		
-		let Some(&f) = h.hotkeys.get(&(ph_mods, key)) else {
+		let Some(hh) = Self::get_hotkey(ph_entry, h) else {
 			return false;
 		};
-			
+		
 		let key_to_release = remap.key;
 		let mods_to_release = remap.mods & !entry.mods;
 		let mods_to_restore = entry.mods & !remap.mods;
 		
 		h.curr_h = None;
-		h.v_mods = ph_mods;
+		h.v_mods = ph_entry.mods;
 		h.suppressed.insert(entry.key);
 		
 		let should_mask = Self::should_mask(mods_to_restore);
@@ -563,7 +594,7 @@ impl Handler {
 			h.sender.send(inputs).unwrap();
 		}
 		
-		Self::map_hotkey(f, KeyMods::new(h.v_mods, key), h)
+		Self::map_hotkey(hh.func, ph_entry, h)
 	}
 	
 	fn kb_unicode(entry: KeyMods, str: &'static str, h: &mut MutexGuard<'_, Handler>) -> bool {
@@ -637,7 +668,9 @@ impl Handler {
 			return true;
 		}
 		
-		let Some(&f) = h.hotkeys.get(&(h.v_mods | entry.mods, key)) else {
+		let ph_entry = KeyMods::new(h.v_mods | entry.mods, key);
+		
+		let Some(hh) = Self::get_hotkey(ph_entry, h) else {
 			return false;
 		};
 		
@@ -659,7 +692,7 @@ impl Handler {
 			h.sender.send(inputs).unwrap();
 		}
 		
-		Self::map_hotkey(f, KeyMods::new(h.v_mods, key), h)
+		Self::map_hotkey(hh.func, ph_entry, h)
 	}
 	
 	fn kb_action(entry: KeyMods, action: fn(KeyEvent) -> Result<(), Error>, h: &mut MutexGuard<'_, Handler>) -> bool {
@@ -731,6 +764,14 @@ impl Handler {
 			Key::RALT   => Mods::RA,
 			Key::RWIN   => Mods::RW,
 			_ => Mods::NONE
+		}
+	}
+	
+	fn get_hotkey(entry: KeyMods, h: &MutexGuard<'_, Handler>) -> Option<HotkeyHandler> {
+		if let Some(hh) = h.hotkeys.get(&entry) && (hh.exempt || !SUSPENDED.load(Ordering::Relaxed)) {
+			Some(*hh)
+		} else {
+			None
 		}
 	}
 	
