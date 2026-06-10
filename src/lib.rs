@@ -1,8 +1,9 @@
 pub mod input;
 pub mod misc;
 pub mod hid;
+pub mod common;
 
-use crate::misc::error::Error;
+use misc::error::Error;
 use input::{handler::{self, Handler}, hotkey::Hotkey, mods::Mods, keys::Key};
 use std::{env, process};
 
