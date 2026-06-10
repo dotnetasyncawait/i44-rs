@@ -3,7 +3,7 @@ pub mod misc;
 pub mod hid;
 pub mod common;
 
-use misc::error::Error;
+use common::error::Error;
 use input::{handler::{self, Handler}, hotkey::Hotkey, mods::Mods, keys::Key};
 use std::{env, process};
 

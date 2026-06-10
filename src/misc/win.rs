@@ -1,4 +1,4 @@
-use crate::misc::error::{Error, Win32Error};
+use crate::common::error::{Error, Win32Error};
 use std::path::Path;
 use windows::{Win32::{System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 	QueryFullProcessImageNameW}, UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId}}, core::PWSTR};
@@ -12,7 +12,7 @@ pub fn get_name() -> Result<String, Error> {
 	let mut process_id: u32 = 0;
 	let ret = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process_id)) };
 	if ret == 0 {
-		return Err(Error::Win32(Win32Error::from_thread()));
+		return Err(Win32Error::from_thread().into());
 	}
 	
 	let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id)? };
@@ -28,7 +28,7 @@ pub fn get_name() -> Result<String, Error> {
 		.file_prefix()
 		.ok_or_else(|| Error::Other(format!("failed to get file prefix: '{full_path}'")))?
 		.to_str()
-		.ok_or_else(|| Error::Other("failed to convert into str".to_string()))?;
+		.ok_or_else(|| Error::Other(format!("failed to convert into str: '{full_path}'")))?;
 	
 	Ok(String::from(name))
 }

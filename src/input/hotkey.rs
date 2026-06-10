@@ -1,4 +1,4 @@
-use crate::misc::error::Error;
+use crate::common::error::Error;
 use super::{mods::Mods, keys::Key, key_event::KeyEvent};
 
 #[derive(Debug, Clone)]
