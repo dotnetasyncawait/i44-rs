@@ -24,16 +24,16 @@ pub struct HidDevice {
 }
 
 impl HidDevice {
-	pub fn new(info: DeviceInfo) -> Self {
-		let input_len = info.input_report_byte_len as usize;
-		let output_len = info.output_report_byte_len as usize;
+	pub fn new(info: Arc<DeviceInfo>) -> Self {
+		let input_len = info.input_report_byte_len;
+		let output_len = info.output_report_byte_len;
 		
 		Self {
-			info: Arc::new(info),
+			info,
 			handle: None,
 			event: None,
-			input: vec![0u8; input_len],
-			output: vec![0u8; output_len],
+			input: vec![0u8; input_len as _],
+			output: vec![0u8; output_len as _],
 		}
 	}
 	
@@ -237,15 +237,15 @@ impl HidDevice {
 
 impl Clone for HidDevice {
 	fn clone(&self) -> Self {
-		let input_len = self.info.input_report_byte_len as usize;
-		let output_len = self.info.output_report_byte_len as usize;
+		let input_len = self.info.input_report_byte_len;
+		let output_len = self.info.output_report_byte_len;
 		
 		Self {
 			info: Arc::clone(&self.info),
 			handle: None,
 			event: None,
-			input: vec![0u8; input_len],
-			output: vec![0u8; output_len],
+			input: vec![0u8; input_len as _],
+			output: vec![0u8; output_len as _],
 		}
 	}
 }
