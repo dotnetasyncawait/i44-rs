@@ -2,6 +2,7 @@ pub mod input;
 pub mod misc;
 pub mod hid;
 pub mod common;
+pub mod apps;
 
 use common::error::Error;
 use misc::mode;
