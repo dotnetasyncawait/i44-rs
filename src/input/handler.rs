@@ -2,8 +2,8 @@ use super::{hotkey::Hotkey, mods::Mods, keys::Key, input_builder::InputBuilder, 
 use crate::common::error::Error;
 use super::constants::{CALL_NEXT, CALL_NEXT_END, CACHED_EVENT};
 use super::key_event::{KeyEvent, KeyEventNotifier};
-use std::{collections::{HashMap, HashSet, hash_map::Entry}, ptr, sync::{mpsc, OnceLock, Mutex, MutexGuard}};
-use std::{sync::atomic::{AtomicBool, Ordering}, thread::{self, JoinHandle}};
+use std::{collections::{HashMap, HashSet, hash_map::Entry}, ptr, thread::{self, JoinHandle}};
+use std::sync::{mpsc, Arc, OnceLock, Mutex, MutexGuard, atomic::{AtomicBool, Ordering}};
 use std::fmt::{self, Debug, Formatter};
 use windows::core::Owned;
 use windows::Win32::{Foundation::{LPARAM, LRESULT, WPARAM}, System::Threading::GetCurrentThreadId};
@@ -22,7 +22,7 @@ pub struct Handler {
 	curr_h: Option<CurrHotkey>,
 	v_mods: Mods,
 	send_count: u8,
-	sender: mpsc::Sender<Vec<INPUT>>, // TODO: use Arc<Vec<INPUT>>?
+	sender: mpsc::Sender<InputMsg>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -50,12 +50,16 @@ impl KeyMods {
 enum CurrHotkey {
 	Default(KeyMods),
 	Remap(KeyMods, KeyMods),
-	// Note: Unicode inputs are mostly short in length (usually 1 or 2 characters),
-	// so cloning is ok (I guess...)
-	Unicode(KeyMods, Vec<INPUT>),
+	Unicode(KeyMods, Arc<Vec<INPUT>>),
 	Action(KeyMods, KeyEventNotifier)
 }
-	
+
+enum InputMsg {
+	Single(INPUT),
+	Many(Vec<INPUT>),
+	Shared(Arc<Vec<INPUT>>),
+}
+
 static HANDLER: OnceLock<Mutex<Handler>> = OnceLock::new();
 static WORKER: OnceLock<Mutex<Worker>> = OnceLock::new();
 static SUSPENDED: AtomicBool = AtomicBool::new(false);
@@ -133,10 +137,15 @@ impl Handler {
 	}
 	
 	pub fn start(mut self) {
-		let (tx, rx) = mpsc::channel::<Vec<INPUT>>();
+		let (tx, rx) = mpsc::channel::<InputMsg>();
 		let _ = thread::spawn(move || {
-			for inputs in rx {
-				unsafe { SendInput(&inputs, size_of::<INPUT>() as _) };	
+			const INPUT_SIZE: i32 = size_of::<INPUT>() as _;
+			for msg in rx {
+				match msg {
+					InputMsg::Single(input) => unsafe { SendInput(&[input], INPUT_SIZE); },
+					InputMsg::Many(inputs) => unsafe { SendInput(&inputs, INPUT_SIZE); },
+					InputMsg::Shared(inputs) => unsafe { SendInput(&inputs, INPUT_SIZE); },
+				}
 			}
 		});
 		self.sender = tx;
@@ -228,7 +237,7 @@ impl Handler {
 		let mut h = Self::lock_handler();
 		if h.send_count != 0 {
 			if !pressed {
-				h.sender.send(vec![INPUT::keybd_up(key, CACHED_EVENT)]).unwrap();
+				h.sender.send(InputMsg::Single(INPUT::keybd_up(key, CACHED_EVENT))).unwrap();
 			}
 			return HANDLED;
 		}
@@ -266,7 +275,7 @@ impl Handler {
 		let mut h = Self::lock_handler();
 		if h.send_count != 0 {
 			if !pressed {
-				h.sender.send(vec![INPUT::mouse_up(key, CACHED_EVENT)]).unwrap();
+				h.sender.send(InputMsg::Single(INPUT::mouse_up(key, CACHED_EVENT))).unwrap();
 			}
 			return HANDLED;
 		}
@@ -349,7 +358,7 @@ impl Handler {
 					.build();
 				
 				h.send_count += 1;
-				h.sender.send(inputs).unwrap();
+				h.sender.send(InputMsg::Many(inputs)).unwrap();
 				true
 			},
 			Hotkey::Unicode(str) => {
@@ -366,7 +375,7 @@ impl Handler {
 						.build();
 					
 					h.send_count += 1;
-					h.sender.send(inputs).unwrap();
+					h.sender.send(InputMsg::Many(inputs)).unwrap();
 				}
 				
 				true
@@ -400,7 +409,7 @@ impl Handler {
 			return match curr_h {
 				CurrHotkey::Default(entry) => Self::kb_default_repeat(*entry, key, mod_bit),
 				CurrHotkey::Remap(entry, remap) => Self::kb_remap_repeat(*entry, *remap, key, mod_bit, h),
-				CurrHotkey::Unicode(entry, inputs) => Self::kb_unicode_repeat(*entry, inputs.clone(), key, mod_bit, h),
+				CurrHotkey::Unicode(entry, inputs) => Self::kb_unicode_repeat(*entry, Arc::clone(&inputs), key, mod_bit, h),
 				CurrHotkey::Action(entry, _) => Self::kb_action_repeat(*entry, key, mod_bit)
 			};
 		}
@@ -473,7 +482,7 @@ impl Handler {
 		h.v_mods = remap.mods | remap_mod_bit;
 		h.curr_h = Some(CurrHotkey::Remap(entry, remap));
 		h.send_count += 1;
-		h.sender.send(inputs).unwrap();
+		h.sender.send(InputMsg::Many(inputs)).unwrap();
 		
 		true
 	}
@@ -499,7 +508,7 @@ impl Handler {
 					.build();
 				
 				h.send_count += 1;
-				h.sender.send(inputs).unwrap();
+				h.sender.send(InputMsg::Many(inputs)).unwrap();
 			}
 			
 			return true;
@@ -524,7 +533,7 @@ impl Handler {
 					.build();
 				
 				h.send_count += 1;
-				h.sender.send(inputs).unwrap();
+				h.sender.send(InputMsg::Many(inputs)).unwrap();
 			}
 			
 			return true;
@@ -551,7 +560,7 @@ impl Handler {
 				};
 				
 				h.send_count += 1;
-				h.sender.send(vec![input]).unwrap();
+				h.sender.send(InputMsg::Single(input)).unwrap();
 				
 				true
 			};
@@ -591,7 +600,7 @@ impl Handler {
 				.build();
 			
 			h.send_count += 1;
-			h.sender.send(inputs).unwrap();
+			h.sender.send(InputMsg::Many(inputs)).unwrap();
 		}
 		
 		Self::map_hotkey(hh.func, ph_entry, h)
@@ -602,11 +611,11 @@ impl Handler {
 			return true; // same as Hotkey::Suppress
 		}
 		
-		let inputs = InputBuilder::unicode(str);
+		let inputs = Arc::new(InputBuilder::unicode(str));
 		let mods_to_release = entry.mods;
 		
 		h.v_mods = Mods::NONE;
-		h.curr_h = Some(CurrHotkey::Unicode(entry, inputs.clone()));
+		h.curr_h = Some(CurrHotkey::Unicode(entry, Arc::clone(&inputs)));
 		
 		if !mods_to_release.is_none() {
 			let should_mask = Self::should_mask(mods_to_release);
@@ -617,11 +626,11 @@ impl Handler {
 				.build();
 			
 			h.send_count += 1;
-			h.sender.send(keys).unwrap();
+			h.sender.send(InputMsg::Many(keys)).unwrap();
 		}
 		
 		h.send_count += 1;
-		h.sender.send(inputs).unwrap();
+		h.sender.send(InputMsg::Shared(inputs)).unwrap();
 		true
 	}
 	
@@ -649,18 +658,18 @@ impl Handler {
 				.build();
 			
 			h.send_count += 1;
-			h.sender.send(inputs).unwrap();
+			h.sender.send(InputMsg::Many(inputs)).unwrap();
 		}
 		
 		true
 	}
 	
 	fn kb_unicode_repeat(
-		entry: KeyMods, inputs: Vec<INPUT>, key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool
+		entry: KeyMods, inputs: Arc<Vec<INPUT>>, key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool
 	{
 		if key == entry.key {
 			h.send_count += 1;
-			h.sender.send(inputs).unwrap();
+			h.sender.send(InputMsg::Shared(inputs)).unwrap();
 			return true;
 		}
 		
@@ -689,7 +698,7 @@ impl Handler {
 				.build();
 			
 			h.send_count += 1;
-			h.sender.send(inputs).unwrap();
+			h.sender.send(InputMsg::Many(inputs)).unwrap();
 		}
 		
 		Self::map_hotkey(hh.func, ph_entry, h)

@@ -16,11 +16,11 @@ impl From<Error> for HidError {
 }
 
 pub(super) trait Win32ErrorExt {
-	fn with_context(&self, msg: &str) -> Self;
+	fn with_context(self, msg: &str) -> Self;
 }
 
 impl Win32ErrorExt for Error {
-	fn with_context(&self, msg: &str) -> Self {
+	fn with_context(self, msg: &str) -> Self {
 		Error::new(self.code(), format!("{msg}: {}", self.message()))
 	}
 }
