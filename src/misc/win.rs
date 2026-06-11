@@ -1,9 +1,12 @@
 use crate::common::error::{Error, Win32Error};
 use std::path::Path;
-use windows::{Win32::{System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-	QueryFullProcessImageNameW}, UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId}}, core::PWSTR};
+use windows::core::PWSTR;
+use windows::Win32::{
+	System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW},
+	UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId}};
 
-pub fn get_name() -> Result<String, Error> {
+
+pub fn name() -> Result<String, Error> {
 	let hwnd = unsafe { GetForegroundWindow() };
 	if hwnd.is_invalid() {
 		return Err(Error::Other(String::from("hwnd is 0")));
@@ -31,4 +34,17 @@ pub fn get_name() -> Result<String, Error> {
 		.ok_or_else(|| Error::Other(format!("failed to convert into str: '{full_path}'")))?;
 	
 	Ok(String::from(name))
+}
+
+pub fn title() -> Result<String, Error> {
+	let hwnd = unsafe { GetForegroundWindow() };
+	if hwnd.is_invalid() {
+		return Err(Error::Other("hwnd == 0".to_string()))
+	}
+	
+	let len = unsafe { GetWindowTextLengthW(hwnd) as usize };
+	let mut buff = vec![0u16; len + 1]; // + NULL
+	let copied = unsafe { GetWindowTextW(hwnd, &mut buff) } as usize ;
+	
+	Ok(String::from_utf16(&buff[..copied])?)
 }
