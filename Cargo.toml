@@ -3,6 +3,9 @@ name = "i44"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+uia = []
+
 [dependencies.windows]
 version = "0.62.0"
 features = [
