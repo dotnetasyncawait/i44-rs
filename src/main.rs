@@ -1,15 +1,15 @@
+mod hotkeys;
+
+use i44::common::kb::I44;
+use i44::App;
+use hotkeys::AppExt;
+
 fn main() {
-	i44::App::new()
+	let app = App::new()
 		.add_hotkeys()
-		.run();
-}
-
-trait AppExt {
-	fn add_hotkeys(self) -> Self;
-}
-
-impl AppExt for i44::App {
-	fn add_hotkeys(self) -> Self {
-		self
-	}
+		.on_exit(|_| { let _ = I44::disable(); });
+	
+	I44::enable().expect("failed to connect to kb");
+	
+	app.run();
 }
