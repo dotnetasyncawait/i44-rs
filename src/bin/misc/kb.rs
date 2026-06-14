@@ -1,5 +1,5 @@
 use std::sync::{Arc, LazyLock};
-use crate::hid::{self, DeviceInfo, HidDevice, HidError};
+use i44::hid::{self, DeviceInfo, HidDevice, HidError};
 use hid_msgs::*;
 use layers::*;
 
@@ -15,6 +15,7 @@ pub mod layers {
 	pub const SYSTEM: u8 = 6;
 }
 
+#[allow(unused)]
 pub mod hid_msgs {
 	pub const RESERVED:         u8 = 0x00;
 	pub const HID_HOST:         u8 = 0x01;

@@ -1,9 +1,10 @@
 use i44::input::{hotkey::Hotkey::{self, *}, mods::Mods, keys::Key};
 use i44::common::error::Error;
-use i44::misc::{win, helpers, mode::{Mode, ModeState}};
+use i44::misc::{win, helpers};
 use i44::apps::*;
-use i44::common::kb::I44;
 use i44::App;
+use super::mode::{Mode, ModeState};
+use super::kb::I44;
 
 type HotkeyResult = Result<Hotkey, Error>;
 
@@ -11,7 +12,7 @@ pub trait AppExt {
 	fn add_hotkeys(self) -> Self;
 }
 
-impl AppExt for i44::App {
+impl AppExt for App {
 	fn add_hotkeys(self) -> Self {
 		self
 			.hotkey(Mods::NONE, Key::B, b)

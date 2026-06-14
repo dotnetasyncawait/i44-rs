@@ -1,5 +1,5 @@
 use std::{thread, sync::{OnceLock, RwLock}};
-use crate::common::kb::{I44, layers::*, hid_msgs::*};
+use super::kb::{I44, layers::*, hid_msgs::*};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ModeState {
@@ -31,16 +31,12 @@ impl Mode {
 	}
 }
 
-pub(crate) fn start() {
+pub fn init() {
 	MODE
 		.set(RwLock::new(Mode{ state: ModeState::None }))
 		.expect("mode should only be initialized once");
 	
 	let _ = thread::spawn(hid_listener);
-}
-
-pub(crate) fn exit() {
-	// TODO: how to stop it?
 }
 
 fn hid_listener() {
