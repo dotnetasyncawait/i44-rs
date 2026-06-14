@@ -138,7 +138,7 @@ impl Handler {
 	
 	pub fn start(mut self) {
 		let (tx, rx) = mpsc::channel::<InputMsg>();
-		let _ = thread::spawn(move || {
+		let _ = thread::spawn(|| {
 			const INPUT_SIZE: i32 = size_of::<INPUT>() as _;
 			for msg in rx {
 				match msg {
@@ -153,7 +153,7 @@ impl Handler {
 		HANDLER.set(Mutex::new(self)).expect("handler should not be set");
 		
 		let (tx, rx) = mpsc::channel::<u32>();
-		let handle = thread::spawn(move || Self::mq_handler(tx));
+		let handle = thread::spawn(|| Self::mq_handler(tx));
 		
 		let thread_id = rx.recv().unwrap();
 		WORKER.set(Mutex::new(Worker(Some(handle), thread_id, 0))).expect("worker should not be set");
