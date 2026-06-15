@@ -6,6 +6,8 @@ pub mod apps;
 
 use common::error::Error;
 use input::{handler::{self, Handler}, hotkey::Hotkey, mods::Mods, keys::Key};
+use misc::main_win::{MainWindow, MsgHandler};
+use windows::Win32::Foundation::HWND;
 use std::{env, process};
 
 #[derive(Clone, Copy, Debug)]
@@ -16,12 +18,13 @@ pub enum ExitReason {
 
 pub struct App {
 	h: Option<Handler>,
+	win: MainWindow,
 	on_exit: Vec<fn(ExitReason)>,
 }
 
 impl App {
 	pub fn new() -> Self {
-		Self { h: Some(Handler::new()), on_exit: Vec::default() }
+		Self { h: Some(Handler::new()), win: MainWindow::new(), on_exit: Vec::default() }
 	}
 	
 	pub fn hotkey(mut self, mods: Mods, key: Key, f: fn() -> Result<Hotkey, Error>) -> Self {
@@ -39,6 +42,11 @@ impl App {
 		self
 	}
 	
+	pub fn on_message(mut self, msg: u32, f: MsgHandler) -> Self {
+		self.win.on_message(msg, f);
+		self
+	}
+	
 	pub fn run(mut self) {
 		self.h.take().unwrap().start();
 		
@@ -52,6 +60,8 @@ impl App {
 			f(exit_reason);
 		}
 		
+		self.win.exit();
+		
 		if let ExitReason::Restart = exit_reason {
 			let exe = env::current_exe().unwrap();
 			let _ = process::Command::new(exe)
@@ -61,6 +71,10 @@ impl App {
 		}
 		
 		process::exit(0);
+	}
+	
+	pub fn hwnd(&self) -> HWND {
+		self.win.hwnd
 	}
 	
 	pub fn exit() {
