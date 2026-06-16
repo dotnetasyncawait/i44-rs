@@ -66,6 +66,9 @@ static SUSPENDED: AtomicBool = AtomicBool::new(false);
 
 const HANDLED: LRESULT = LRESULT(1);
 
+const MENU_MASK_MOD: Mods = Mods::LC;
+const MENU_MASK_KEY: Key = Key::LCTRL;
+
 pub fn wait() -> i8 {
 	let Some(worker) = WORKER.get() else {
 		unreachable!("should not be called before initialization");
@@ -234,7 +237,7 @@ impl Handler {
 			return HANDLED; // injected key
 		};
 		
-		let mut h = Self::lock_handler();
+		let h = Self::lock_handler();
 		if h.send_count != 0 {
 			if !pressed {
 				h.sender.send(InputMsg::Single(INPUT::keybd_up(key, CACHED_EVENT))).unwrap();
@@ -242,10 +245,9 @@ impl Handler {
 			return HANDLED;
 		}
 		
-		if Self::handle_kb(key, pressed, &mut h) {
+		if Self::handle_kb(key, pressed, h) {
 			HANDLED
 		} else {
-			drop(h);
 			call_next(code, wparam, lparam)
 		}
 	}
@@ -272,7 +274,7 @@ impl Handler {
 		
 		let (key, pressed) = Self::ms_get_key(wparam, s.mouseData);
 		
-		let mut h = Self::lock_handler();
+		let h = Self::lock_handler();
 		if h.send_count != 0 {
 			if !pressed {
 				h.sender.send(InputMsg::Single(INPUT::mouse_up(key, CACHED_EVENT))).unwrap();
@@ -280,23 +282,23 @@ impl Handler {
 			return HANDLED;
 		}
 		
-		if Self::handle_ms(key, pressed, &mut h) {
+		if Self::handle_ms(key, pressed, h) {
 			HANDLED
 		} else {
 			call_next(code, wparam, lparam)
 		}
 	}
 	
-	fn handle_kb(key: Key, pressed: bool, h: &mut MutexGuard<'_, Handler>) -> bool {
+	fn handle_kb(key: Key, pressed: bool, mut h: MutexGuard<'_, Handler>) -> bool {
 		let mod_bit = Self::get_mod(key);
 		
 		if pressed {
-			if Self::kb_key_down(key, mod_bit, h) {
+			if Self::kb_key_down(key, mod_bit, &mut h) {
 				return true;
 			}
 			h.v_mods |= mod_bit;
 		} else {
-			if Self::kb_key_up(key, mod_bit, h) {
+			if Self::kb_key_up(key, mod_bit, &mut h) {
 				return true;
 			}
 			h.v_mods &= !mod_bit;
@@ -305,15 +307,15 @@ impl Handler {
 		false
 	}
 	
-	fn handle_ms(key: Key, pressed: bool, h: &mut MutexGuard<'_, Handler>) -> bool {
+	fn handle_ms(key: Key, pressed: bool, mut h: MutexGuard<'_, Handler>) -> bool {
 		if pressed {
 			if key.is_mouse_wheel() {
-				Self::ms_wheel(key, h)
+				Self::ms_wheel(key, &mut h)
 			} else {
-				Self::kb_key_down(key, Mods::NONE, h)
+				Self::kb_key_down(key, Mods::NONE, &mut h)
 			}
 		} else {
-			Self::kb_key_up(key, Mods::NONE, h)
+			Self::kb_key_up(key, Mods::NONE, &mut h)
 		}
 	}
 	
@@ -341,20 +343,33 @@ impl Handler {
 			Hotkey::Suppress => true,
 			Hotkey::Remap(r_mods, r_key) => {
 				let remap_mod_bit = Self::get_mod(r_key);
-				let entry_mods = entry.mods & !(r_mods | remap_mod_bit);
-				let remap_mods = r_mods & !entry.mods;
+				let mut entry_mods = entry.mods & !(r_mods | remap_mod_bit);
+				let mut remap_mods = r_mods & !entry.mods;
+				let mut entry_mods_2 = entry_mods;
+				let mut remap_mods_2 = remap_mods;
+				
+				let (mask_down, mask_up) = Self::remap_mask_start(r_key, &mut entry_mods, &mut remap_mods);
+				let mask_up_2 = Self::remap_mask_end(&mut remap_mods_2, &mut entry_mods_2);
 				
 				let is_wheel = r_key.is_mouse_wheel();
-				let should_mask = Self::should_mask(entry_mods);
-				let size = ((entry_mods | remap_mods).count_ones() + (should_mask as u32 * 2)) * 2 + 1 + (!is_wheel as u32 * 1);
+				let size = mask_down as u32
+					+ (entry_mods | remap_mods).count_ones()
+					+ mask_up as u32
+					+ 1
+					+ !is_wheel as u32
+					+ (remap_mods_2 | entry_mods_2).count_ones()
+					+ mask_up_2 as u32;
 				
 				let inputs = InputBuilder::with_capacity(size as _)
-					.mods_up_masked(entry_mods, should_mask)
+					.key_down_if(MENU_MASK_KEY, mask_down)
+					.mods_up(entry_mods)
 					.mods_down(remap_mods)
+					.key_up_if(MENU_MASK_KEY, mask_up)
 					.key_down(r_key)
 					.key_up_if(r_key, !is_wheel)
-					.mods_up(remap_mods)
-					.mods_down_masked(entry_mods, should_mask)
+					.mods_up(remap_mods_2)
+					.mods_down(entry_mods_2)
+					.key_up_if(MENU_MASK_KEY, mask_up_2)
 					.build();
 				
 				h.send_count += 1;
@@ -467,15 +482,18 @@ impl Handler {
 	
 	fn kb_remap(entry: KeyMods, remap: KeyMods, h: &mut MutexGuard<'_, Handler>) -> bool {
 		let remap_mod_bit = Self::get_mod(remap.key);
-		let mods_to_release = entry.mods & !(remap.mods | remap_mod_bit);
-		let mods_to_press = remap.mods & !entry.mods;
+		let mut mods_to_release = entry.mods & !(remap.mods | remap_mod_bit);
+		let mut mods_to_press = remap.mods & !entry.mods;
 		
-		let should_mask = Self::should_mask(mods_to_release);
-		let size = (mods_to_release | mods_to_press).count_ones() + (should_mask as u32 * 2) + 1;
+		let (mask_down, mask_up) = Self::remap_mask_start(remap.key, &mut mods_to_release, &mut mods_to_press);
+		
+		let size = mask_down as u32 + (mods_to_release | mods_to_press).count_ones() + mask_up as u32 + 1;
 		
 		let inputs = InputBuilder::with_capacity(size as _)
-			.mods_up_masked(mods_to_release, should_mask)
+			.key_down_if(MENU_MASK_KEY, mask_down)
+			.mods_up(mods_to_release)
 			.mods_down(mods_to_press)
+			.key_up_if(MENU_MASK_KEY, mask_up)
 			.key_down(remap.key)
 			.build();
 		
@@ -490,21 +508,23 @@ impl Handler {
 	fn kb_remap_up(entry: KeyMods, remap: KeyMods, key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool {
 		if key == entry.key {
 			let key_to_release = remap.key;
-			let mods_to_release = remap.mods & !entry.mods;
-			let mods_to_restore = entry.mods & !remap.mods;
+			let mut mods_to_release = remap.mods & !entry.mods;
+			let mut mods_to_restore = entry.mods & !remap.mods;
 			
 			h.curr_h = None;
 			h.v_mods = (h.v_mods & !(mods_to_release | Self::get_mod(key_to_release))) | mods_to_restore;
 			
-			let should_mask = Self::should_mask(mods_to_restore);
+			let mask_up = Self::remap_mask_end(&mut mods_to_release, &mut mods_to_restore);
+			
 			let is_wheel = key_to_release.is_mouse_wheel();
-			let size = (mods_to_release | mods_to_restore).count_ones() + (should_mask as u32 * 2) + (!is_wheel as u32 * 1);
+			let size = !is_wheel as u32 + (mods_to_release | mods_to_restore).count_ones() + mask_up as u32;
 			
 			if size != 0 {
 				let inputs = InputBuilder::with_capacity(size as _)
 					.key_up_if(key_to_release, !is_wheel)
 					.mods_up(mods_to_release)
-					.mods_down_masked(mods_to_restore, should_mask)
+					.mods_down(mods_to_restore)
+					.key_up_if(MENU_MASK_KEY, mask_up)
 					.build();
 				
 				h.send_count += 1;
@@ -524,7 +544,7 @@ impl Handler {
 			Self::ignore_keys(entry.mods & !mod_bit, entry.key, h);
 			
 			let is_wheel = key_to_release.is_mouse_wheel();
-			let size = mods_to_release.count_ones() + (!is_wheel as u32 * 1);
+			let size = !is_wheel as u32 + mods_to_release.count_ones();
 			
 			if size != 0 {
 				let inputs = InputBuilder::with_capacity(size as _)
@@ -580,23 +600,27 @@ impl Handler {
 			return false;
 		};
 		
-		let key_to_release = remap.key;
-		let mods_to_release = remap.mods & !entry.mods;
-		let mods_to_restore = entry.mods & !remap.mods;
+		// interrupt
 		
 		h.curr_h = None;
 		h.v_mods = ph_entry.mods;
 		h.suppressed.insert(entry.key);
 		
-		let should_mask = Self::should_mask(mods_to_restore);
+		let key_to_release = remap.key;
+		let mut mods_to_release = remap.mods & !entry.mods;
+		let mut mods_to_restore = entry.mods & !remap.mods;
+		
+		let mask_up = Self::remap_mask_end(&mut mods_to_release, &mut mods_to_restore);
+		
 		let is_wheel = key_to_release.is_mouse_wheel();
-		let size = (mods_to_release | mods_to_restore).count_ones() + (should_mask as u32 * 2) + (!is_wheel as u32 * 1);
+		let size = !is_wheel as u32 + (mods_to_release | mods_to_restore).count_ones() + mask_up as u32;
 		
 		if size != 0 {
 			let inputs = InputBuilder::with_capacity(size as _)
 				.key_up_if(key_to_release, !is_wheel)
 				.mods_up(mods_to_release)
-				.mods_down_masked(mods_to_restore, should_mask)
+				.mods_down(mods_to_restore)
+				.key_up_if(MENU_MASK_KEY, mask_up)
 				.build();
 			
 			h.send_count += 1;
@@ -729,6 +753,63 @@ impl Handler {
 	
 	fn kb_action_repeat(entry: KeyMods, key: Key, mod_bit: Mods) -> bool {
 		key == entry.key || entry.mods.contains(mod_bit)
+	}
+	
+	fn remap_mask_start(r_key: Key, up: &mut Mods, down: &mut Mods) -> (bool, bool) {
+		// masking rules:
+		// - mask UP mods on hotkey start
+		// - mask DOWN mods on hotkey end
+		// - mask DOWN mods on hotkey start IF remap.key is mouse key (only wheel?) (eg: (...) -> (A, ms_key))
+		// 
+		// strategies:
+		// - if UP mods should be masked -> mask down and append mask to release mods:
+		//   (A, key) -> (S, r_key): (C down, A up, C up) (S down);
+		// - if UP mods should be masked AND r_key is mouse key and DOWN mods should be masked (rule 3) -> mask both:
+		//   (A, key) -> (W, ms_key): (C down, A up) (W down, C up);
+		// - if UP mods should NOT be masked (while rule 3 is true) -> prepend mask to DOWN mods and release it last:
+		//   (S, key) -> (W, ms_key): (S up) (C down, W down, C up);
+		// 
+		// in general:
+		// - if UP mods should be masked and DOWN mods have mask -> press that mask at the beginning;
+		//   (A, key) -> (C, r_key): (C down, A up) ();
+		// - if DOWN mods should be masked and UP mods have mask -> release that mask at the end;
+		//   (C, key) -> (A, r_key): () (A down, C up);
+		
+		let mut mask_up = false;
+		let mask_down = Self::should_mask(*up);
+		
+		if mask_down {
+			if down.contains(MENU_MASK_MOD) {
+				*down &= !MENU_MASK_MOD;
+			} else {
+				if r_key.is_mouse_key() && Self::should_mask(*down) {
+					mask_up = true;
+				} else {
+					*up |= MENU_MASK_MOD; // append (mask will be released last)
+				}
+			}
+		} else if r_key.is_mouse_key() && Self::should_mask(*down) {
+			if up.contains(MENU_MASK_MOD) {
+				*up &= !MENU_MASK_MOD;
+			} else {
+				*down |= MENU_MASK_MOD; // prepend (mask will be pressed first)
+			}
+			mask_up = true;
+		}
+		
+		(mask_down, mask_up)
+	}
+	
+	fn remap_mask_end(up: &mut Mods, down: &mut Mods) -> bool {
+		let mask_up = Self::should_mask(*down);
+		if mask_up {
+			if up.contains(MENU_MASK_MOD) {
+				*up &= !MENU_MASK_MOD;
+			} else {
+				*down |= MENU_MASK_MOD; // prepend
+			}
+		}
+		mask_up
 	}
 	
 	fn map_hotkey(f: fn() -> Result<Hotkey, Error>, entry: KeyMods, h: &mut MutexGuard<'_, Handler>) -> bool {

@@ -56,6 +56,10 @@ impl InputBuilder {
 		self
 	}
 	
+	pub fn key_down_if(self, key: Key, cond: bool) -> Self {
+		if cond { self.key_down(key) } else { self }
+	}
+	
 	pub fn key_up(mut self, key: Key) -> Self {
 		self.buf.push(if key.is_mouse_key() {
 			INPUT::mouse_up(key, CALL_NEXT)
