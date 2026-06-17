@@ -1,6 +1,6 @@
-pub const NAME: &'_ str = "Code";
-
 use crate::input::{mods::Mods, keys::Key, hotkey::{Hotkey, Hotkey::*}};
+
+pub const NAME: &'_ str = "Code";
 
 // hotkeys
 
@@ -46,3 +46,5 @@ pub fn restart_debugger() -> Hotkey { Remap(Mods::LCS, Key::F5) }
 pub fn step_over() -> Hotkey { Remap(Mods::NONE, Key::F10) }
 pub fn step_into() -> Hotkey { Remap(Mods::NONE, Key::F11) }
 pub fn step_out() -> Hotkey { Remap(Mods::LS, Key::F11) }
+pub fn scroll_up_fast() -> Hotkey { Remap(Mods::LA, Key::WH_UP) }
+pub fn scroll_down_fast() -> Hotkey { Remap(Mods::LA, Key::WH_DOWN) }

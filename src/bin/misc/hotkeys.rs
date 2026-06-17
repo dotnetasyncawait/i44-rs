@@ -64,10 +64,12 @@ impl AppExt for App {
 			.hotkey_exempt(Mods::LSW, Key::NUM0, suspend)
 			.hotkey_exempt(Mods::LW,  Key::NUM0, exit)
 			
-			.hotkey(Mods::LS,    Key::UP, ls_up) // nav keys
+			.hotkey(Mods::LS,    Key::UP, ls_up)
 			.hotkey(Mods::LS,    Key::DOWN, ls_down)
 			.hotkey(Mods::LA,    Key::UP, la_up)
 			.hotkey(Mods::LA,    Key::DOWN, la_down)
+			.hotkey(Mods::LCS,   Key::UP, lcs_up)
+			.hotkey(Mods::LCS,   Key::DOWN, lcs_down)
 			.hotkey(Mods::LSA,   Key::UP, lsa_up)
 			.hotkey(Mods::LSA,   Key::DOWN, lsa_down)
 			.hotkey(Mods::LS_RS, Key::UP, ls_rs_up)
@@ -336,6 +338,7 @@ fn period() -> HotkeyResult {
 fn rs_lbrace() -> HotkeyResult {
 	match Mode::get() {
 		ModeState::NSymbol => match win::name()?.as_str() {
+			vscode::NAME => vscode::prev_member(),
 			chrome::NAME => chrome::decrease_playb_speed(),
 			_ => Suppress
 		}
@@ -346,6 +349,7 @@ fn rs_lbrace() -> HotkeyResult {
 fn rs_rbrace() -> HotkeyResult {
 	match Mode::get() {
 		ModeState::NSymbol => match win::name()?.as_str() {
+			vscode::NAME => vscode::next_member(),
 			chrome::NAME => chrome::increase_playb_speed(),
 			_ => Suppress
 		}
@@ -527,6 +531,28 @@ fn la_down() -> HotkeyResult {
 			wt::NAME => wt::scroll_down(),
 			_ => Default
 		}
+		_ => Default
+	}.ok()
+}
+
+fn lcs_up() -> HotkeyResult {
+	match Mode::get() {
+		ModeState::Normal => match win::name()?.as_str() {
+			vscode::NAME => { helpers::center_cursor()?; vscode::scroll_up_fast() },
+			tg::NAME => { helpers::center_cursor()?; tg::scroll_page_up() },
+			_ => Suppress
+		},
+		_ => Default
+	}.ok()
+}
+
+fn lcs_down() -> HotkeyResult {
+	match Mode::get() {
+		ModeState::Normal => match win::name()?.as_str() {
+			vscode::NAME => { helpers::center_cursor()?; vscode::scroll_down_fast() },
+			tg::NAME => { helpers::center_cursor()?; tg::scroll_page_down() },
+			_ => Suppress
+		},
 		_ => Default
 	}.ok()
 }

@@ -101,8 +101,6 @@ fn win_mq(tx: mpsc::Sender<(u32, usize)>, state: Arc<State>) {
 }
 
 unsafe extern "system" fn win_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-	println!("msg: 0x{msg:X}"); // TODO: remove
-	
 	if msg == WM_NCCREATE {
 		let cs = unsafe { ptr::read(lparam.0 as *const CREATESTRUCTW) };
 		unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize) };

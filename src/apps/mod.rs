@@ -4,3 +4,4 @@ pub mod discord;
 pub mod explorer;
 pub mod wt;
 pub mod obsid;
+pub mod tg;

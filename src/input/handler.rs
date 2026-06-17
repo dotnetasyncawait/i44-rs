@@ -234,7 +234,7 @@ impl Handler {
 		}
 		
 		let Some((key, pressed)) = Self::kb_get_key(&s) else {
-			return HANDLED; // injected key
+			return call_next(code, wparam, lparam); // injected key
 		};
 		
 		let h = Self::lock_handler();
@@ -766,13 +766,13 @@ impl Handler {
 		//   (A, key) -> (S, r_key): (C down, A up, C up) (S down);
 		// - if UP mods should be masked AND r_key is mouse key and DOWN mods should be masked (rule 3) -> mask both:
 		//   (A, key) -> (W, ms_key): (C down, A up) (W down, C up);
-		// - if UP mods should NOT be masked (while rule 3 is true) -> prepend mask to DOWN mods and release it last:
+		// - if UP mods should NOT be masked (while rule 3 applies) -> prepend mask to DOWN mods and release it last:
 		//   (S, key) -> (W, ms_key): (S up) (C down, W down, C up);
 		// 
 		// in general:
-		// - if UP mods should be masked and DOWN mods have mask -> press that mask at the beginning;
+		// - if UP mods should be masked and DOWN mods have mask -> press that mask at the beginning:
 		//   (A, key) -> (C, r_key): (C down, A up) ();
-		// - if DOWN mods should be masked and UP mods have mask -> release that mask at the end;
+		// - if DOWN mods should be masked and UP mods have mask -> release that mask at the end:
 		//   (C, key) -> (A, r_key): () (A down, C up);
 		
 		let mut mask_up = false;
