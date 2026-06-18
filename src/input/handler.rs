@@ -2,7 +2,7 @@ use super::{hotkey::Hotkey, mods::Mods, keys::Key, input_builder::InputBuilder, 
 use crate::common::error::Error;
 use super::constants::{CALL_NEXT, CALL_NEXT_END, CACHED_EVENT};
 use super::key_event::{KeyEvent, KeyEventNotifier};
-use std::{collections::{HashMap, HashSet, hash_map::Entry}, ptr, thread::{self, JoinHandle}};
+use std::{collections::{HashMap, hash_map::Entry}, ptr, thread::{self, JoinHandle}};
 use std::sync::{mpsc, Arc, OnceLock, Mutex, MutexGuard, atomic::{AtomicBool, Ordering}};
 use std::fmt::{self, Debug, Formatter};
 use windows::core::Owned;
@@ -18,7 +18,7 @@ use windows::Win32::UI::{
 #[derive(Debug)]
 pub struct Handler {
 	hotkeys: HashMap<KeyMods, HotkeyHandler>,
-	suppressed: HashSet<Key>,
+	suppressed: HashMap<Key, bool>, // bool: once
 	curr_h: Option<CurrHotkey>,
 	v_mods: Mods,
 	send_count: u8,
@@ -116,7 +116,7 @@ impl Handler {
 		
 		Self {
 			hotkeys: HashMap::new(),
-			suppressed: HashSet::new(),
+			suppressed: HashMap::new(),
 			curr_h: None,
 			v_mods: Mods::NONE,
 			send_count: 0,
@@ -340,7 +340,7 @@ impl Handler {
 		
 		match hotkey {
 			Hotkey::Default => false,
-			Hotkey::Suppress => true,
+			Hotkey::Suppress | Hotkey::SuppressOnce => true,
 			Hotkey::Remap(r_mods, r_key) => {
 				let remap_mod_bit = Self::get_mod(r_key);
 				let mut entry_mods = entry.mods & !(r_mods | remap_mod_bit);
@@ -416,8 +416,8 @@ impl Handler {
 	}
 	
 	fn kb_key_down(key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool {
-		if h.suppressed.contains(&key) {
-			return true;
+		if let Entry::Occupied(entry) = h.suppressed.entry(key) && *entry.get() { // suppressed once
+			entry.remove();
 		}
 		
 		if let Some(curr_h) = &h.curr_h {
@@ -439,7 +439,7 @@ impl Handler {
 	}
 	
 	fn kb_key_up(key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool {
-		if h.suppressed.remove(&key) {
+		if h.suppressed.remove(&key).is_some() {
 			return true;
 		}
 		
@@ -475,8 +475,8 @@ impl Handler {
 		false
 	}
 	
-	fn kb_suppress(key: Key, h: &mut MutexGuard<'_, Handler>) -> bool {
-		h.suppressed.insert(key);
+	fn kb_suppress(key: Key, h: &mut MutexGuard<'_, Handler>, once: bool) -> bool {
+		h.suppressed.insert(key, once);
 		true
 	}
 	
@@ -604,7 +604,7 @@ impl Handler {
 		
 		h.curr_h = None;
 		h.v_mods = ph_entry.mods;
-		h.suppressed.insert(entry.key);
+		h.suppressed.insert(entry.key, false);
 		
 		let key_to_release = remap.key;
 		let mut mods_to_release = remap.mods & !entry.mods;
@@ -665,7 +665,7 @@ impl Handler {
 			mods_to_restore = entry.mods;
 		} else if entry.mods.contains(mod_bit) {
 			mods_to_restore = entry.mods & !mod_bit;
-			h.suppressed.insert(entry.key);
+			h.suppressed.insert(entry.key, false);
 		} else {
 			return false;
 		}
@@ -711,7 +711,7 @@ impl Handler {
 		
 		h.curr_h = None;
 		h.v_mods |= mods_to_restore;
-		h.suppressed.insert(entry.key);
+		h.suppressed.insert(entry.key, false);
 		
 		if !mods_to_restore.is_none() {
 			let should_mask = Self::should_mask(mods_to_restore);
@@ -816,7 +816,8 @@ impl Handler {
 		match f() {
 			Ok(hotkey) => match hotkey {
 				Hotkey::Default => Self::kb_default(entry, h),
-				Hotkey::Suppress => Self::kb_suppress(entry.key, h),
+				Hotkey::Suppress => Self::kb_suppress(entry.key, h, false),
+				Hotkey::SuppressOnce => Self::kb_suppress(entry.key, h, true),
 				Hotkey::Remap(mods, key) => Self::kb_remap(entry, KeyMods::new(mods, key), h),
 				Hotkey::Unicode(str) => Self::kb_unicode(entry, str, h),
 				Hotkey::Action(action) => Self::kb_action(entry, action, h)
@@ -830,17 +831,17 @@ impl Handler {
 	
 	fn ignore_keys(mods: Mods, key: Key, h: &mut MutexGuard<'_, Handler>) {
 		if !mods.is_none() {
-			if mods.contains(Mods::LC) { h.suppressed.insert(Key::LCTRL); }
-			if mods.contains(Mods::LS) { h.suppressed.insert(Key::LSHIFT); }
-			if mods.contains(Mods::LA) { h.suppressed.insert(Key::LALT); }
-			if mods.contains(Mods::LW) { h.suppressed.insert(Key::LWIN); }
-			if mods.contains(Mods::RC) { h.suppressed.insert(Key::RCTRL); }
-			if mods.contains(Mods::RS) { h.suppressed.insert(Key::RSHIFT); }
-			if mods.contains(Mods::RA) { h.suppressed.insert(Key::RALT); }
-			if mods.contains(Mods::RW) { h.suppressed.insert(Key::RWIN); }
+			if mods.contains(Mods::LC) { h.suppressed.insert(Key::LCTRL, false); }
+			if mods.contains(Mods::LS) { h.suppressed.insert(Key::LSHIFT, false); }
+			if mods.contains(Mods::LA) { h.suppressed.insert(Key::LALT, false); }
+			if mods.contains(Mods::LW) { h.suppressed.insert(Key::LWIN, false); }
+			if mods.contains(Mods::RC) { h.suppressed.insert(Key::RCTRL, false); }
+			if mods.contains(Mods::RS) { h.suppressed.insert(Key::RSHIFT, false); }
+			if mods.contains(Mods::RA) { h.suppressed.insert(Key::RALT, false); }
+			if mods.contains(Mods::RW) { h.suppressed.insert(Key::RWIN, false); }
 		}
 		
-		h.suppressed.insert(key);
+		h.suppressed.insert(key, false);
 	}
 	
 	fn get_mod(key: Key) -> Mods {
