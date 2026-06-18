@@ -3,7 +3,7 @@ use crate::common::error::Error;
 use super::constants::{CALL_NEXT, CALL_NEXT_END, CACHED_EVENT};
 use super::key_event::{KeyEvent, KeyEventNotifier};
 use std::{collections::{HashMap, hash_map::Entry}, ptr, thread::{self, JoinHandle}};
-use std::sync::{mpsc, Arc, OnceLock, Mutex, MutexGuard, atomic::{AtomicBool, Ordering}};
+use std::sync::{mpsc::{self, SyncSender, TrySendError}, Arc, OnceLock, Mutex, MutexGuard, atomic::{AtomicBool, Ordering}};
 use std::fmt::{self, Debug, Formatter};
 use windows::core::Owned;
 use windows::Win32::{Foundation::{LPARAM, LRESULT, WPARAM}, System::Threading::GetCurrentThreadId};
@@ -51,7 +51,8 @@ enum CurrHotkey {
 	Default(KeyMods),
 	Remap(KeyMods, KeyMods),
 	Unicode(KeyMods, Arc<Vec<INPUT>>),
-	Action(KeyMods, KeyEventNotifier)
+	Action(KeyMods, KeyEventNotifier),
+	ActionRepeat(KeyMods, mpsc::SyncSender<()>),
 }
 
 enum InputMsg {
@@ -411,7 +412,15 @@ impl Handler {
 				});
 				
 				true
-			}
+			},
+			Hotkey::ActionRepeat(action) => {
+				thread::spawn(move || {
+					if let Err(err) = action() {
+						println!("From action_r: {err:?}; ({entry:?})"); // TODO: display the error with a window
+					}
+				});
+				true
+			},
 		}
 	}
 	
@@ -425,7 +434,8 @@ impl Handler {
 				CurrHotkey::Default(entry) => Self::kb_default_repeat(*entry, key, mod_bit),
 				CurrHotkey::Remap(entry, remap) => Self::kb_remap_repeat(*entry, *remap, key, mod_bit, h),
 				CurrHotkey::Unicode(entry, inputs) => Self::kb_unicode_repeat(*entry, Arc::clone(&inputs), key, mod_bit, h),
-				CurrHotkey::Action(entry, _) => Self::kb_action_repeat(*entry, key, mod_bit)
+				CurrHotkey::Action(entry, _) => Self::kb_action_repeat(*entry, key, mod_bit),
+				CurrHotkey::ActionRepeat(entry, sender) => Self::kb_action_r_repeat(*entry, &sender, key, mod_bit),
 			};
 		}
 		
@@ -448,7 +458,8 @@ impl Handler {
 				CurrHotkey::Default(entry) => Self::kb_default_up(*entry, key, mod_bit, h),
 				CurrHotkey::Remap(entry, remap) => Self::kb_remap_up(*entry, *remap, key, mod_bit, h),
 				CurrHotkey::Unicode(entry, _) => Self::kb_unicode_up(*entry, key, mod_bit, h),
-				CurrHotkey::Action(entry, notf) => Self::kb_action_up(*entry, notf.clone(), key, h)
+				CurrHotkey::Action(entry, notf) => Self::kb_action_up(*entry, notf.clone(), key, h),
+				CurrHotkey::ActionRepeat(entry, _) => Self::kb_action_r_up(*entry, key, h),
 			},
 			None => false
 		}
@@ -755,6 +766,45 @@ impl Handler {
 		key == entry.key || entry.mods.contains(mod_bit)
 	}
 	
+	fn kb_action_r(entry: KeyMods, action: fn() -> Result<(), Error>, h: &mut MutexGuard<'_, Handler>) -> bool {
+		let (tx, rx) = mpsc::sync_channel(0);
+		h.curr_h = Some(CurrHotkey::ActionRepeat(entry, tx));
+		
+		thread::spawn(move || {
+			loop {
+				if let Err(err) = action() {
+					println!("From action_r: {err:?}; ({entry:?})"); // TODO: display the error with a window
+					break;
+				}
+				if rx.recv().is_err() {
+					break;
+				}
+			}
+		});
+		
+		true
+	}
+	
+	fn kb_action_r_up(entry: KeyMods, key: Key, h: &mut MutexGuard<'_, Handler>) -> bool {
+		if key == entry.key {
+			h.curr_h = None;
+			true
+		} else {
+			false
+		}
+	}
+	
+	fn kb_action_r_repeat(entry: KeyMods, sender: &SyncSender<()>, key: Key, mod_bit: Mods) -> bool {
+		if key == entry.key {
+			if let Err(err) = sender.try_send(()) && err == TrySendError::Disconnected(()) {
+				panic!("Receiver 'ActionRepeat' disconnected");
+			}
+			return true;
+		}
+		
+		entry.mods.contains(mod_bit)
+	}
+	
 	fn remap_mask_start(r_key: Key, up: &mut Mods, down: &mut Mods) -> (bool, bool) {
 		// masking rules:
 		// - mask UP mods on hotkey start
@@ -820,7 +870,8 @@ impl Handler {
 				Hotkey::SuppressOnce => Self::kb_suppress(entry.key, h, true),
 				Hotkey::Remap(mods, key) => Self::kb_remap(entry, KeyMods::new(mods, key), h),
 				Hotkey::Unicode(str) => Self::kb_unicode(entry, str, h),
-				Hotkey::Action(action) => Self::kb_action(entry, action, h)
+				Hotkey::Action(action) => Self::kb_action(entry, action, h),
+				Hotkey::ActionRepeat(action) => Self::kb_action_r(entry, action, h),
 			},
 			Err(err) => {
 				println!("{err:?} ({entry:?})"); // TODO: display the error with a window
@@ -906,6 +957,7 @@ impl Debug for CurrHotkey {
 			Self::Remap(entry, remap) => f.debug_tuple("Remap").field(entry).field(remap).finish(),
 			Self::Unicode(entry, _) => f.debug_tuple("Unicode").field(entry).finish(), // TODO
 			Self::Action(entry, notf) => f.debug_tuple("Action").field(entry).field(notf).finish(),
+			Self::ActionRepeat(entry, sender) => f.debug_tuple("ActionRepeat").field(entry).field(sender).finish(),
 		}
 	}
 }

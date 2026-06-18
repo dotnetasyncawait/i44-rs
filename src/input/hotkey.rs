@@ -9,6 +9,7 @@ pub enum Hotkey {
 	Remap(Mods, Key),
 	Unicode(&'static str),
 	Action(fn(KeyEvent) -> Result<(), Error>),
+	ActionRepeat(fn() -> Result<(), Error>),
 }
 
 impl Hotkey {
