@@ -425,8 +425,12 @@ impl Handler {
 	}
 	
 	fn kb_key_down(key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool {
-		if let Entry::Occupied(entry) = h.suppressed.entry(key) && *entry.get() { // suppressed once
-			entry.remove();
+		if let Entry::Occupied(entry) = h.suppressed.entry(key) {
+			if *entry.get() { // suppressed once
+				entry.remove();
+			} else {
+				return true;
+			}
 		}
 		
 		if let Some(curr_h) = &h.curr_h {
