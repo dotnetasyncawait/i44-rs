@@ -403,7 +403,7 @@ impl Handler {
 				true
 			},
 			Hotkey::Action(action) => {
-				let (event, notf) = KeyEvent::new();
+				let (notf, event) = KeyEvent::new();
 				// Mouse wheel has only `down` state, so the event will always report 'up'.
 				notf.notify();
 				// Since there's no 'up' event for wheel-keys, we don't store the currently performing hotkey.
@@ -764,7 +764,7 @@ impl Handler {
 	}
 	
 	fn kb_action(entry: KeyMods, action: fn(KeyEvent) -> Result<(), Error>, h: &mut MutexGuard<'_, Handler>) -> bool {
-		let (event, notf) = KeyEvent::new();
+		let (notf, event) = KeyEvent::new();
 		h.curr_h = Some(CurrHotkey::Action(entry, notf));
 		
 		thread::spawn(move || {

@@ -6,9 +6,9 @@ pub struct KeyEvent {
 }
 
 impl KeyEvent {
-	pub(super) fn new() -> (Self, KeyEventNotifier) {
+	pub(super) fn new() -> (KeyEventNotifier, Self) {
 		let (tx, rx) = mpsc::channel();
-		(Self { rx }, KeyEventNotifier { tx })
+		(KeyEventNotifier { tx }, Self { rx })
 	}
 	
 	pub fn is_up(&self) -> bool {
