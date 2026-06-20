@@ -349,8 +349,14 @@ impl Handler {
 				let mut entry_mods_2 = entry_mods;
 				let mut remap_mods_2 = remap_mods;
 				
-				let (mask_down, mask_up) = Self::remap_mask_start(r_key, &mut entry_mods, &mut remap_mods);
-				let mask_up_2 = Self::remap_mask_end(&mut remap_mods_2, &mut entry_mods_2);
+				let ((mask_down, mask_up), mask_up_2) = if (entry.mods & r_mods).contains(MENU_MASK_MOD) {
+					((false, false), false)
+				} else {
+					(
+						Self::remap_mask_start(r_key, &mut entry_mods, &mut remap_mods),
+						Self::remap_mask_end(&mut remap_mods_2, &mut entry_mods_2)
+					)
+				};
 				
 				let is_wheel = r_key.is_mouse_wheel();
 				let size = mask_down as u32
@@ -500,7 +506,11 @@ impl Handler {
 		let mut mods_to_release = entry.mods & !(remap.mods | remap_mod_bit);
 		let mut mods_to_press = remap.mods & !entry.mods;
 		
-		let (mask_down, mask_up) = Self::remap_mask_start(remap.key, &mut mods_to_release, &mut mods_to_press);
+		let (mask_down, mask_up) = if (remap.mods & entry.mods).contains(MENU_MASK_MOD) {
+			(false, false)
+		} else {
+			Self::remap_mask_start(remap.key, &mut mods_to_release, &mut mods_to_press)
+		};
 		
 		let size = mask_down as u32 + (mods_to_release | mods_to_press).count_ones() + mask_up as u32 + 1;
 		
@@ -527,10 +537,13 @@ impl Handler {
 			let mut mods_to_restore = entry.mods & !remap.mods;
 			
 			h.curr_h = None;
-			h.v_mods = (h.v_mods & !(mods_to_release | Self::get_mod(key_to_release))) | mods_to_restore;
+			h.v_mods = h.v_mods & !(mods_to_release | Self::get_mod(key_to_release)) | mods_to_restore;
 			
-			let mask_up = Self::remap_mask_end(&mut mods_to_release, &mut mods_to_restore);
-			
+			let mask_up = if (entry.mods & remap.mods).contains(MENU_MASK_MOD) {
+				false
+			} else {
+				Self::remap_mask_end(&mut mods_to_release, &mut mods_to_restore)
+			};
 			let is_wheel = key_to_release.is_mouse_wheel();
 			let size = !is_wheel as u32 + (mods_to_release | mods_to_restore).count_ones() + mask_up as u32;
 			
@@ -551,20 +564,27 @@ impl Handler {
 		
 		if entry.mods.contains(mod_bit) {
 			let key_to_release = remap.key;
-			let mods_to_release = remap.mods;
+			let mut mods_to_release = remap.mods & (!entry.mods | mod_bit);
+			let mut mods_to_restore = entry.mods & !(remap.mods | mod_bit);
 			
 			h.curr_h = None;
-			h.v_mods &= !(mods_to_release | Self::get_mod(key_to_release));
+			h.v_mods = h.v_mods & !(mods_to_release | Self::get_mod(key_to_release)) | mods_to_restore;
+			h.suppressed.insert(entry.key, false);
 			
-			Self::ignore_keys(entry.mods & !mod_bit, entry.key, h);
-			
+			let mask_up = if ((entry.mods & remap.mods) & !mod_bit).contains(MENU_MASK_MOD) {
+				false
+			} else {
+				Self::remap_mask_end(&mut mods_to_release, &mut mods_to_restore)
+			};
 			let is_wheel = key_to_release.is_mouse_wheel();
-			let size = !is_wheel as u32 + mods_to_release.count_ones();
+			let size = !is_wheel as u32 + (mods_to_release | mods_to_restore).count_ones() + mask_up as u32;
 			
 			if size != 0 {
 				let inputs = InputBuilder::with_capacity(size as _)
 					.key_up_if(key_to_release, !is_wheel)
 					.mods_up(mods_to_release)
+					.mods_down(mods_to_restore)
+					.key_up_if(MENU_MASK_KEY, mask_up)
 					.build();
 				
 				h.send_count += 1;
@@ -882,21 +902,6 @@ impl Handler {
 				true
 			}
 		}
-	}
-	
-	fn ignore_keys(mods: Mods, key: Key, h: &mut MutexGuard<'_, Handler>) {
-		if !mods.is_none() {
-			if mods.contains(Mods::LC) { h.suppressed.insert(Key::LCTRL, false); }
-			if mods.contains(Mods::LS) { h.suppressed.insert(Key::LSHIFT, false); }
-			if mods.contains(Mods::LA) { h.suppressed.insert(Key::LALT, false); }
-			if mods.contains(Mods::LW) { h.suppressed.insert(Key::LWIN, false); }
-			if mods.contains(Mods::RC) { h.suppressed.insert(Key::RCTRL, false); }
-			if mods.contains(Mods::RS) { h.suppressed.insert(Key::RSHIFT, false); }
-			if mods.contains(Mods::RA) { h.suppressed.insert(Key::RALT, false); }
-			if mods.contains(Mods::RW) { h.suppressed.insert(Key::RWIN, false); }
-		}
-		
-		h.suppressed.insert(key, false);
 	}
 	
 	fn get_mod(key: Key) -> Mods {
