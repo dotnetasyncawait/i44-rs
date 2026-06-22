@@ -8,7 +8,9 @@ use common::error::Error;
 use input::{handler::{self, Handler}, hotkey::Hotkey, mods::Mods, keys::Key};
 use misc::{main_win::{MainWindow, MsgHandler, Icon}, tray_icon::{IconBuilder, TrayIcon}};
 use windows::Win32::Foundation::HWND;
-use std::{env, process};
+use std::{env, process, sync::OnceLock};
+
+static ICON: OnceLock<Icon> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug)]
 pub enum ExitReason {
@@ -24,7 +26,20 @@ pub struct App {
 
 impl App {
 	pub fn new() -> Self {
-		Self { h: Some(Handler::new()), win: MainWindow::new(), on_exit: Vec::default() }
+		let win = MainWindow::new();
+		
+		let mut dir = std::env::current_dir().unwrap();
+		dir.push("media");
+		
+		let icon = win.icon_builder()
+			.add("i44",             dir.join("default.ico")).expect("failed to add 'default' icon")
+			.add("i44 (suspended)", dir.join("suspended.ico")).expect("failed to add 'suspended' icon")
+			.build();
+		
+		let icon = win.add_icon(icon);
+		ICON.set(icon).expect("icon should not be set");
+		
+		Self { h: Some(Handler::new()), win, on_exit: Vec::default() }
 	}
 	
 	pub fn hotkey(mut self, mods: Mods, key: Key, f: fn() -> Result<Hotkey, Error>) -> Self {
@@ -56,6 +71,8 @@ impl App {
 	}
 	
 	pub fn run(mut self) -> ! {
+		ICON.get().unwrap().display(handler::is_suspended() as _).unwrap();
+		
 		self.h.take().unwrap().start();
 		
 		let exit_reason = match handler::wait() {
@@ -91,10 +108,17 @@ impl App {
 	
 	pub fn suspend(state: bool) {
 		handler::suspend(state);
+		if let Some(icon) = ICON.get() {
+			icon.display(state as _).expect("icon should not outlive App");
+		}
 	}
 	
 	pub fn suspend_togg() -> bool {
-		handler::suspend_togg()
+		let state = handler::suspend_togg();
+		if let Some(icon) = ICON.get() {
+			icon.display(state as _).expect("icon should not outlive App");
+		}
+		state
 	}
 	
 	pub fn restart() {

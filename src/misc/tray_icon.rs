@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+use std::{path::Path, sync::atomic::{AtomicU32, Ordering::Relaxed}};
 use crate::common::error::{Error, Win32ErrExt, ErrResultExt};
 use windows::core::{Owned, PCWSTR};
 use windows::Win32::{
@@ -134,17 +134,20 @@ impl IconBuilder {
 		Self { hwnd, msg, icons: Vec::new(), handler: None }
 	}
 	
-	pub fn add(mut self, tip: &'_ str, path: &'_ str) -> Result<Self, Error> {
+	pub fn add<P: AsRef<Path>>(mut self, tip: &'_ str, path: P) -> Result<Self, Error> {
 		use std::iter::once;
 		
-		let encoded_path = path
+		let path = path
+			.as_ref()
+			.to_str()
+			.ok_or(Error::Other(String::from("Invalid path")))?
 			.encode_utf16()
 			.chain(once(0))
 			.collect::<Vec<u16>>();
 		
 		let handle = unsafe {
-			LoadImageW(None, PCWSTR(encoded_path.as_ptr()), IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE)
-				.with_context(|| format!("Failed to load icon from '{path}'"))?
+			LoadImageW(None, PCWSTR(path.as_ptr()), IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE)
+				.with_context(|| String::from("Failed to load icon"))?
 		};
 		
 		let h_icon = unsafe { Owned::new(HICON(handle.0)) };

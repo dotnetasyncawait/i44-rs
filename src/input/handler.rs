@@ -103,6 +103,10 @@ pub fn exit(ret_value: i8) {
 	}
 }
 
+pub fn is_suspended() -> bool {
+	SUSPENDED.load(Ordering::Relaxed)
+}
+
 pub fn suspend(state: bool) {
 	SUSPENDED.store(state, Ordering::Relaxed);
 }

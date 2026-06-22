@@ -183,6 +183,7 @@ unsafe extern "system" fn win_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 	unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
+#[derive(Debug)]
 pub struct Icon {
 	id: u32,
 	state: Weak<State>,
