@@ -6,7 +6,7 @@ pub mod apps;
 
 use common::error::Error;
 use input::{handler::{self, Handler}, hotkey::Hotkey, mods::Mods, keys::Key};
-use misc::main_win::{MainWindow, MsgHandler};
+use misc::{main_win::{MainWindow, MsgHandler, Icon}, tray_icon::{IconBuilder, TrayIcon}};
 use windows::Win32::Foundation::HWND;
 use std::{env, process};
 
@@ -42,12 +42,20 @@ impl App {
 		self
 	}
 	
-	pub fn on_message(mut self, msg: u32, f: MsgHandler) -> Self {
+	pub fn on_message(self, msg: u32, f: MsgHandler) -> Self {
 		self.win.on_message(msg, f);
 		self
 	}
 	
-	pub fn run(mut self) {
+	pub fn icon_builder(&self) -> IconBuilder {
+		self.win.icon_builder()
+	}
+
+	pub fn add_icon(&self, icon: TrayIcon) -> Icon {
+		self.win.add_icon(icon)
+	}
+	
+	pub fn run(mut self) -> ! {
 		self.h.take().unwrap().start();
 		
 		let exit_reason = match handler::wait() {
