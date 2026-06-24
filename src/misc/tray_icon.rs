@@ -1,4 +1,4 @@
-use std::{path::Path, sync::{Mutex, MutexGuard, atomic::{AtomicU32, Ordering::Relaxed}}};
+use std::{fmt, path::Path, sync::{Mutex, MutexGuard, TryLockError, atomic::{AtomicU32, Ordering::Relaxed}}};
 use crate::common::error::{Error, Win32ErrExt, ErrResultExt};
 use windows::core::{Owned, PCWSTR};
 use windows::Win32::{
@@ -7,7 +7,7 @@ use windows::Win32::{
 		NOTIFYICONDATAW, Shell_NotifyIconW, NOTIFY_ICON_DATA_FLAGS, NOTIFY_ICON_STATE},
 	UI::WindowsAndMessaging::{HICON, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, LoadImageW}};
 
-type EventHandler = fn(&TrayIcon, IconEvent);
+type EventHandler = fn(&TrayIcon, IconEvent) -> Result<(), Error>;
 type Win32Error = windows::core::Error;
 
 #[derive(PartialEq, Eq)]
@@ -15,11 +15,6 @@ pub enum IconEvent {
 	LClick,
 	RClick,
 	DClick,
-}
-
-struct Item {
-	tip: Vec<u16>,
-	h_icon: Owned<HICON>,
 }
 
 pub struct TrayIcon {
@@ -68,6 +63,27 @@ impl Drop for TrayIcon {
 		let deleted = unsafe { Shell_NotifyIconW(NIM_DELETE, &self.lock_inner().nid).as_bool() };
 		assert!(deleted, "Failed to delete icon: {:?}", Win32Error::from_thread())
 	}
+}
+
+impl fmt::Debug for TrayIcon {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		let mut d = f.debug_struct("TrayIcon");
+		
+		match self.inner.try_lock() {
+			Ok(inner) => d.field("inner", &inner),
+			Err(err) => match err {
+				TryLockError::Poisoned(_) => d.field("inner", &"<poisoned>"),
+				TryLockError::WouldBlock => d.field("inner", &"<locked>"),
+			},
+		};
+		
+		d.finish()
+	}
+}
+
+struct Item {
+	tip: Vec<u16>,
+	h_icon: Owned<HICON>,
 }
 
 struct Inner {
@@ -139,6 +155,17 @@ impl Inner {
 		} else {
 			Err(Error::Win32(Win32Error::from_thread().with_context("Failed to update icon")))
 		}
+	}
+}
+
+impl fmt::Debug for Inner {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("Inner")
+			.field("id", &self.nid.uID)
+			.field("hwnd", &self.nid.hWnd)
+			.field("index", &self.index)
+			.field("visible", &self.visible)
+			.finish()
 	}
 }
 

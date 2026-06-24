@@ -4,7 +4,7 @@ pub mod hid;
 pub mod common;
 pub mod apps;
 
-use common::error::Error;
+use common::error::{Error, ErrResultExt, OK};
 use input::{handler::{self, Handler}, hotkey::Hotkey, mods::Mods, keys::Key};
 use misc::{main_win::{MainWindow, MsgHandler, Icon}, tray_icon::{IconBuilder, TrayIcon, IconEvent}};
 use std::{env, process, sync::OnceLock};
@@ -131,35 +131,37 @@ impl App {
 	}
 }
 
-fn icon_handler(icon: &TrayIcon, event: IconEvent) {
+fn icon_handler(icon: &TrayIcon, event: IconEvent) -> Result<(), Error> {
 	if event != IconEvent::RClick {
-		return;
+		return OK;
 	}
 	
 	const SUSPEND: i32 = 1;
 	const EXIT: i32 = 2;
 	
 	let res = unsafe {
-		let menu = Owned::new(CreatePopupMenu().expect("failed to create Popup menu"));
+		let menu = Owned::new(CreatePopupMenu().with_context(|| "failed to create Popup menu")?);
 		
 		let mut susp_flags = MF_STRING;
 		if handler::is_suspended() {
 			susp_flags |= MF_CHECKED;
 		}
 		
-		AppendMenuW(*menu, susp_flags, SUSPEND as _, w!("Suspend")).unwrap();
-		AppendMenuW(*menu, MF_STRING, EXIT as _, w!("Exit")).unwrap();
+		AppendMenuW(*menu, susp_flags, SUSPEND as _, w!("Suspend")).with_context(|| "failed to append 'Suspend' menu item")?;
+		AppendMenuW(*menu, MF_STRING, EXIT as _, w!("Exit")).with_context(|| "failed to append 'Exit' menu item")?;
 		
 		let mut point = POINT::default();
-		GetCursorPos(&mut point).unwrap();
+		GetCursorPos(&mut point).with_context(|| "failed to get cursor position")?;
 		
 		TrackPopupMenuEx(*menu, (TPM_BOTTOMALIGN | TPM_RETURNCMD).0, point.x, point.y, icon.hwnd(), None)
 	};
 	
 	match res.0 {
 		0 => {}, // cancelled
-		SUSPEND => icon.display(handler::suspend_togg() as _).unwrap(),
+		SUSPEND => return icon.display(handler::suspend_togg() as _),
 		EXIT => App::exit(),
 		_ => unreachable!()
-	}
+	};
+	
+	OK
 }

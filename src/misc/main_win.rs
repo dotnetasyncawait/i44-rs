@@ -179,8 +179,11 @@ unsafe extern "system" fn win_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 			let icons = state.icons.lock().unwrap();
 			let icon_id = wparam.0 as u32;
 			
-			if let Some(icon) = icons.get(&icon_id) && let Some(f) = icon.handler {
-				f(icon, event);
+			if let Some(icon) = icons.get(&icon_id)
+				&& let Some(f) = icon.handler
+				&& let Err(err) = f(icon, event)
+			{
+				println!("From icon handler: {err:?}; (id: {icon_id})"); // TODO: display with window
 			}
 			
 			return LRESULT(0);
