@@ -6,9 +6,13 @@ pub mod apps;
 
 use common::error::Error;
 use input::{handler::{self, Handler}, hotkey::Hotkey, mods::Mods, keys::Key};
-use misc::{main_win::{MainWindow, MsgHandler, Icon}, tray_icon::{IconBuilder, TrayIcon}};
-use windows::Win32::Foundation::HWND;
+use misc::{main_win::{MainWindow, MsgHandler, Icon}, tray_icon::{IconBuilder, TrayIcon, IconEvent}};
 use std::{env, process, sync::OnceLock};
+use windows::core::{Owned, w};
+use windows::Win32::{
+	Foundation::{HWND, POINT},
+	UI::WindowsAndMessaging::{AppendMenuW, CreatePopupMenu, TrackPopupMenuEx, GetCursorPos, MF_STRING, MF_CHECKED,
+		TPM_BOTTOMALIGN, TPM_RETURNCMD}};
 
 static ICON: OnceLock<Icon> = OnceLock::new();
 
@@ -34,6 +38,7 @@ impl App {
 		let icon = win.icon_builder()
 			.add("i44",             dir.join("default.ico")).expect("failed to add 'default' icon")
 			.add("i44 (suspended)", dir.join("suspended.ico")).expect("failed to add 'suspended' icon")
+			.handler(icon_handler)
 			.build();
 		
 		let icon = win.add_icon(icon);
@@ -123,5 +128,38 @@ impl App {
 	
 	pub fn restart() {
 		handler::exit(1);
+	}
+}
+
+fn icon_handler(icon: &TrayIcon, event: IconEvent) {
+	if event != IconEvent::RClick {
+		return;
+	}
+	
+	const SUSPEND: i32 = 1;
+	const EXIT: i32 = 2;
+	
+	let res = unsafe {
+		let menu = Owned::new(CreatePopupMenu().expect("failed to create Popup menu"));
+		
+		let mut susp_flags = MF_STRING;
+		if handler::is_suspended() {
+			susp_flags |= MF_CHECKED;
+		}
+		
+		AppendMenuW(*menu, susp_flags, SUSPEND as _, w!("Suspend")).unwrap();
+		AppendMenuW(*menu, MF_STRING, EXIT as _, w!("Exit")).unwrap();
+		
+		let mut point = POINT::default();
+		GetCursorPos(&mut point).unwrap();
+		
+		TrackPopupMenuEx(*menu, (TPM_BOTTOMALIGN | TPM_RETURNCMD).0, point.x, point.y, icon.hwnd(), None)
+	};
+	
+	match res.0 {
+		0 => {}, // cancelled
+		SUSPEND => icon.display(handler::suspend_togg() as _).unwrap(),
+		EXIT => App::exit(),
+		_ => unreachable!()
 	}
 }

@@ -1,15 +1,15 @@
-use std::{ffi::c_void, ptr, sync::{Arc, Mutex, Weak, mpsc}, thread::{self, JoinHandle}};
-use std::collections::{HashMap, hash_map::Entry};
+use std::{ffi::c_void, ptr, sync::{Arc, Mutex, Weak, atomic::{AtomicBool, Ordering::Relaxed}, mpsc}};
+use std::{thread::{self, JoinHandle}, collections::{HashMap, hash_map::Entry}};
 use super::tray_icon::{TrayIcon, IconBuilder, IconEvent};
 use crate::common::error::Error;
 use windows::core::w;
 use windows::Win32::{
 	Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
-	System::{Threading::GetCurrentThreadId, LibraryLoader::GetModuleHandleW},
-	UI::WindowsAndMessaging::{CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, MSG, PostThreadMessageW,
-		RegisterClassW, TranslateMessage, WM_QUIT, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP, CREATESTRUCTW, GWLP_USERDATA,
-		GetWindowLongPtrW, SetWindowLongPtrW, WM_NCCREATE, WM_USER, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MOUSEMOVE,
-		WM_RBUTTONDOWN}};
+	System::LibraryLoader::GetModuleHandleW,
+	UI::WindowsAndMessaging::{CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, MSG, RegisterClassW,
+		TranslateMessage, WM_QUIT, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP, CREATESTRUCTW, GWLP_USERDATA, GetWindowLongPtrW,
+		SetWindowLongPtrW, WM_NCCREATE, WM_USER, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_RBUTTONDOWN,
+		SetForegroundWindow, WM_ENTERIDLE, WM_ENTERMENULOOP, WM_EXITMENULOOP, EndMenu, PostMessageW, PostQuitMessage}};
 
 pub type MsgHandler = fn(HWND, u32, WPARAM, LPARAM) -> isize;
 type Win32Error = windows::core::Error;
@@ -18,18 +18,19 @@ const WM_ICON_MSG: u32 = WM_USER | 0xFF;
 
 pub struct State {
 	handlers: Mutex<HashMap<u32, Vec<MsgHandler>>>,
-	icons: Mutex<HashMap<u32, Arc<Mutex<TrayIcon>>>>,
+	icons: Mutex<HashMap<u32, Arc<TrayIcon>>>,
+	is_menu_loop: AtomicBool,
 }
 
 impl State {
 	pub fn new() -> Self {
-		Self { handlers: Mutex::new(HashMap::new()), icons: Mutex::new(HashMap::new()) }
+		Self { handlers: Mutex::new(HashMap::new()), icons: Mutex::new(HashMap::new()), is_menu_loop: AtomicBool::new(false) }
 	}
 }
 
+#[allow(unused)]
 pub struct MainWindow {
 	pub hwnd: HWND,
-	thread_id: u32,
 	jh: JoinHandle<()>,
 	
 	// The strong reference is owned by the message queue thread.
@@ -42,11 +43,11 @@ impl MainWindow {
 		let state = Arc::new(State::new());
 		let weak_state = Arc::downgrade(&state);
 		
-		let (tx, rx) = mpsc::channel::<(u32, usize)>();
+		let (tx, rx) = mpsc::channel::<usize>();
 		let jh = thread::spawn(|| win_mq(tx, state));
-		let (thread_id, hwnd) = rx.recv().unwrap();
+		let hwnd = HWND(rx.recv().unwrap() as _);
 		
-		Self { jh, thread_id, hwnd: HWND(hwnd as _), state: weak_state }
+		Self { jh, hwnd, state: weak_state }
 	}
 	
 	pub fn on_message(&self, msg: u32, f: MsgHandler) {
@@ -67,7 +68,7 @@ impl MainWindow {
 		let state = self.state.upgrade().expect("State should be alive if Self is");
 		let id = icon.id();
 		
-		let icon = Arc::new(Mutex::new(icon));
+		let icon = Arc::new(icon);
 		let weak_icon = Arc::downgrade(&icon);
 		
 		if state.icons.lock().unwrap().insert(id, icon).is_some() {
@@ -78,12 +79,14 @@ impl MainWindow {
 	}
 	
 	pub fn exit(self) {
-		unsafe { PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0)).unwrap() };
+		// Note: the reason for not posting a quit message directly to the thread (via PostThreadMessage)
+		// is that if a menu loop is running, the thread message will be ignored.
+		unsafe { PostMessageW(Some(self.hwnd), WM_QUIT, WPARAM(0), LPARAM(0)).unwrap() }
 		self.jh.join().unwrap();
 	}
 }
 
-fn win_mq(tx: mpsc::Sender<(u32, usize)>, state: Arc<State>) {
+fn win_mq(tx: mpsc::Sender<usize>, state: Arc<State>) {
 	let h_inst = HINSTANCE(unsafe { GetModuleHandleW(None).unwrap().0 });
 	let class_name = w!("i44_win");
 	
@@ -108,7 +111,7 @@ fn win_mq(tx: mpsc::Sender<(u32, usize)>, state: Arc<State>) {
 		Some(h_inst),
 		Some(r_state as *const c_void)) }.expect("failed to create window");
 	
-	tx.send((unsafe { GetCurrentThreadId() }, hwnd.0 as usize)).unwrap();
+	tx.send(hwnd.0 as usize).unwrap();
 	drop(tx);
 	
 	let mut msg = MSG::default();
@@ -130,42 +133,59 @@ fn win_mq(tx: mpsc::Sender<(u32, usize)>, state: Arc<State>) {
 }
 
 unsafe extern "system" fn win_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-	if msg == WM_NCCREATE {
-		let cs = unsafe { ptr::read(lparam.0 as *const CREATESTRUCTW) };
-		unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize) };
-		return LRESULT(1);
-	};
-	
-	if msg == WM_ICON_MSG && lparam.0 as u32 == WM_MOUSEMOVE {
-		return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+	match msg {
+		WM_NCCREATE => {
+			let cs = unsafe { ptr::read(lparam.0 as *const CREATESTRUCTW) };
+			unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize) };
+			return LRESULT(1);
+		},
+		WM_ICON_MSG if lparam.0 as u32 == WM_MOUSEMOVE => return LRESULT(0),
+		WM_ENTERIDLE => return def_win_proc(hwnd, msg, wparam, lparam),
+		_ => {}
 	}
 	
 	let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const State };
 	if ptr.is_null() {
-		return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+		return def_win_proc(hwnd, msg, wparam, lparam);
 	}
 	
 	let state = unsafe { &*ptr };
 	
-	if msg == WM_ICON_MSG {
-		let icon_id = wparam.0 as u32;
-		let icons = state.icons.lock().unwrap();
-		
-		if let Some(icon) = icons.get(&icon_id) {
-			let mut icon = icon.lock().unwrap();
-			
-			if let Some(f) = icon.handler {
-				match lparam.0 as u32 {
-					WM_LBUTTONDOWN => f(&mut *icon, IconEvent::LClick),
-					WM_RBUTTONDOWN => f(&mut *icon, IconEvent::RClick),
-					WM_LBUTTONDBLCLK => f(&mut *icon, IconEvent::DClick),
-					_ => {}
-				};
+	match msg {
+		WM_ENTERMENULOOP => {
+			_ = unsafe { SetForegroundWindow(hwnd) };
+			state.is_menu_loop.store(true, Relaxed);
+			return def_win_proc(hwnd, msg, wparam, lparam);
+		},
+		WM_EXITMENULOOP => {
+			state.is_menu_loop.store(false, Relaxed);
+			return def_win_proc(hwnd, msg, wparam, lparam);
+		},
+		WM_QUIT => {
+			if state.is_menu_loop.load(Relaxed) {
+				unsafe { EndMenu().expect("failed to end menu") };
 			}
-		}
-		
-		drop(icons);
-		return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+			unsafe { PostQuitMessage(0) };
+			return LRESULT(0);
+		},
+		WM_ICON_MSG => {
+			let event = match lparam.0 as u32 {
+				WM_LBUTTONDOWN => IconEvent::LClick,
+				WM_LBUTTONDBLCLK => IconEvent::DClick,
+				WM_RBUTTONDOWN => IconEvent::RClick,
+				_ => return LRESULT(0)
+			};
+			
+			let icons = state.icons.lock().unwrap();
+			let icon_id = wparam.0 as u32;
+			
+			if let Some(icon) = icons.get(&icon_id) && let Some(f) = icon.handler {
+				f(icon, event);
+			}
+			
+			return LRESULT(0);
+		},
+		_ => {}
 	}
 	
 	let map = state.handlers.lock().unwrap();
@@ -180,20 +200,24 @@ unsafe extern "system" fn win_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 	}
 	
 	drop(map);
-	unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+	return def_win_proc(hwnd, msg, wparam, lparam);
+	
+	fn def_win_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+		unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+	}
 }
 
 #[derive(Debug)]
 pub struct Icon {
 	id: u32,
 	state: Weak<State>,
-	inner: Weak<Mutex<TrayIcon>>,
+	inner: Weak<TrayIcon>,
 }
 
 impl Icon {
 	pub fn display(&self, index: usize) -> Result<(), Error> {
 		if let Some(icon) = self.inner.upgrade() {
-			icon.lock().unwrap().display(index)
+			icon.display(index)
 		} else {
 			Self::dropped_err()
 		}
@@ -201,7 +225,7 @@ impl Icon {
 	
 	pub fn show(&self) -> Result<(), Error> {
 		if let Some(icon) = self.inner.upgrade() {
-			icon.lock().unwrap().show()
+			icon.show()
 		} else {
 			Self::dropped_err()
 		}
@@ -209,7 +233,7 @@ impl Icon {
 	
 	pub fn hide(&self) -> Result<(), Error> {
 		if let Some(icon) = self.inner.upgrade() {
-			icon.lock().unwrap().hide()
+			icon.hide()
 		} else {
 			Self::dropped_err()
 		}
@@ -217,7 +241,7 @@ impl Icon {
 	
 	pub fn toggle_visibility(&self) -> Result<bool, Error> {
 		if let Some(icon) = self.inner.upgrade() {
-			icon.lock().unwrap().toggle_visibility()
+			icon.toggle_visibility()
 		} else {
 			Self::dropped_err()
 		}

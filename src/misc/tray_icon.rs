@@ -1,4 +1,4 @@
-use std::{path::Path, sync::atomic::{AtomicU32, Ordering::Relaxed}};
+use std::{path::Path, sync::{Mutex, MutexGuard, atomic::{AtomicU32, Ordering::Relaxed}}};
 use crate::common::error::{Error, Win32ErrExt, ErrResultExt};
 use windows::core::{Owned, PCWSTR};
 use windows::Win32::{
@@ -7,9 +7,10 @@ use windows::Win32::{
 		NOTIFYICONDATAW, Shell_NotifyIconW, NOTIFY_ICON_DATA_FLAGS, NOTIFY_ICON_STATE},
 	UI::WindowsAndMessaging::{HICON, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, LoadImageW}};
 
-type EventHandler = fn(&mut TrayIcon, IconEvent);
+type EventHandler = fn(&TrayIcon, IconEvent);
 type Win32Error = windows::core::Error;
 
+#[derive(PartialEq, Eq)]
 pub enum IconEvent {
 	LClick,
 	RClick,
@@ -22,10 +23,7 @@ struct Item {
 }
 
 pub struct TrayIcon {
-	nid: NOTIFYICONDATAW,
-	index: usize,
-	visible: bool,
-	icons: Vec<Item>,
+	inner: Mutex<Inner>,
 	pub(super) handler: Option<EventHandler>
 }
 
@@ -47,12 +45,43 @@ impl TrayIcon {
 		let succeeded = unsafe { Shell_NotifyIconW(NIM_ADD, &nid).as_bool() };
 		assert!(succeeded, "Icon creation failed: {:?}", Win32Error::from_thread());
 		
-		TrayIcon { nid, icons, handler, index: usize::MAX, visible: false }
+		let inner = Mutex::new(Inner { nid, icons, index: usize::MAX, visible: false });
+		TrayIcon { inner, handler }
 	}
 	
-	pub(super) fn id(&self) -> u32 { self.nid.uID }
+	// Note: 'id' and 'hwnd' are read-only fields, and they don't really need a lock. 'id' is read
+	// only once (on adding TrayIcon to a window), while owning the instance, so no lock contention.
+	// 'hwnd', as an example, can be called each time on creating a context menu (might consider making
+	// a separate field).
 	
-	pub fn display(&mut self, index: usize) -> Result<(), Error> {
+	pub(super) fn id(&self) -> u32 { self.lock_inner().id() }
+	pub fn hwnd(&self) -> HWND { self.lock_inner().hwnd() }
+	pub fn display(&self, index: usize) -> Result<(), Error> { self.lock_inner().display(index) }
+	pub fn show(&self) -> Result<(), Error> { self.lock_inner().show() }
+	pub fn hide(&self) -> Result<(), Error> { self.lock_inner().hide() }
+	pub fn toggle_visibility(&self) -> Result<bool, Error> { self.lock_inner().toggle_visibility() }
+	fn lock_inner(&self) -> MutexGuard<'_, Inner> { self.inner.lock().unwrap() }
+}
+
+impl Drop for TrayIcon {
+	fn drop(&mut self) {
+		let deleted = unsafe { Shell_NotifyIconW(NIM_DELETE, &self.lock_inner().nid).as_bool() };
+		assert!(deleted, "Failed to delete icon: {:?}", Win32Error::from_thread())
+	}
+}
+
+struct Inner {
+	nid: NOTIFYICONDATAW,
+	index: usize,
+	visible: bool,
+	icons: Vec<Item>,
+}
+
+impl Inner {
+	fn id(&self) -> u32 { self.nid.uID }
+	fn hwnd(&self) -> HWND { self.nid.hWnd }
+	
+	fn display(&mut self, index: usize) -> Result<(), Error> {
 		assert!(index < self.icons.len(), "Invalid icon index");
 		
 		if index == self.index {
@@ -68,21 +97,21 @@ impl TrayIcon {
 		Ok(())
 	}
 	
-	pub fn show(&mut self) -> Result<(), Error> {
+	fn show(&mut self) -> Result<(), Error> {
 		if !self.visible {
 			self.toggle_visibility()?;
 		}
 		Ok(())
 	}
 	
-	pub fn hide(&mut self) -> Result<(), Error> {
+	fn hide(&mut self) -> Result<(), Error> {
 		if self.visible {
 			self.toggle_visibility()?;
 		}
 		Ok(())
 	}
 	
-	pub fn toggle_visibility(&mut self) -> Result<bool, Error> {
+	fn toggle_visibility(&mut self) -> Result<bool, Error> {
 		self.notify(0, NIF_STATE, self.visible)?; // Index is ignored for NIF_STATE
 		self.visible ^= true;
 		Ok(self.visible)
@@ -113,14 +142,7 @@ impl TrayIcon {
 	}
 }
 
-impl Drop for TrayIcon {
-	fn drop(&mut self) {
-		let deleted = unsafe { Shell_NotifyIconW(NIM_DELETE, &self.nid).as_bool() };
-		assert!(deleted, "Failed to delete icon: {:?}", Win32Error::from_thread())
-	}
-}
-
-unsafe impl Send for TrayIcon {} // I'm scared here
+unsafe impl Send for Inner {} // I'm scared here
 
 pub struct IconBuilder {
 	hwnd: HWND,
