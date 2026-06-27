@@ -41,8 +41,8 @@ impl App {
 			.handler(icon_handler)
 			.build();
 		
-		let icon = win.add_icon(icon);
-		ICON.set(icon).expect("icon should not be set");
+		icon.display(handler::is_suspended() as _).unwrap();
+		ICON.set(win.add_icon(icon)).expect("icon should not be set");
 		
 		Self { h: Some(Handler::new()), win, on_exit: Vec::default() }
 	}
@@ -76,8 +76,6 @@ impl App {
 	}
 	
 	pub fn run(mut self) -> ! {
-		ICON.get().unwrap().display(handler::is_suspended() as _).unwrap();
-		
 		self.h.take().unwrap().start();
 		
 		let exit_reason = match handler::wait() {

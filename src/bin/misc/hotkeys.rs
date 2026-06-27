@@ -3,8 +3,7 @@ use i44::common::error::Error;
 use i44::misc::{win, helpers};
 use i44::apps::*;
 use i44::App;
-use super::mode::{Mode, ModeState};
-use super::kb::I44;
+use super::{mode::{Mode, ModeState}, kb::I44, mic};
 
 type HotkeyResult = Result<Hotkey, Error>;
 
@@ -92,13 +91,13 @@ impl AppExt for App {
 			.hotkey(Mods::LS, Key::XBUTTON1, ls_xbutton1)
 			.hotkey(Mods::LS, Key::LBUTTON, ls_lbutton)
 			
-			.hotkey(Mods::NONE,  Key::F3, f3)
-			.hotkey(Mods::NONE,  Key::F4, f4)
-			.hotkey(Mods::NONE,  Key::F6, f6)
-			.hotkey(Mods::NONE,  Key::F7, f7)
-			.hotkey(Mods::NONE,  Key::F8, f8)
-			.hotkey(Mods::NONE,  Key::F21, f21)
-			// .hotkey_exempt(Mods::NONE,  Key::F23, f23) // TODO: AudioAPI, XAudio2, TrayIcon
+			.hotkey(Mods::NONE, Key::F3, f3)
+			.hotkey(Mods::NONE, Key::F4, f4)
+			.hotkey(Mods::NONE, Key::F6, f6)
+			.hotkey(Mods::NONE, Key::F7, f7)
+			.hotkey(Mods::NONE, Key::F8, f8)
+			.hotkey(Mods::NONE, Key::F21, f21)
+			.hotkey_exempt(Mods::NONE, Key::F23, f23) // TODO: XAudio2
 	}
 }
 
@@ -774,6 +773,11 @@ fn f8() -> HotkeyResult {
 
 fn f21() -> HotkeyResult {
 	Ok(Action(helpers::drag_win))
+}
+
+fn f23() -> HotkeyResult {
+	mic::tgl_mute()?;
+	Ok(Suppress)
 }
 
 fn suspend() -> HotkeyResult {

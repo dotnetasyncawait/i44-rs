@@ -2,12 +2,15 @@ use std::{fmt::Display, string::FromUtf16Error};
 use crate::hid::HidError;
 
 pub type Win32Error = windows::core::Error;
+pub type IOError = std::io::Error;
+
 pub const OK: Result<(), Error> = Ok(());
 
 #[derive(Debug)]
 pub enum Error {
 	Win32(Win32Error),
 	Hid(HidError),
+	IO(IOError),
 	Other(String)
 }
 
@@ -26,6 +29,12 @@ impl From<FromUtf16Error> for Error {
 impl From<HidError> for Error {
 	fn from(value: HidError) -> Self {
 		Self::Hid(value)
+	}
+}
+
+impl From<IOError> for Error {
+	fn from(value: IOError) -> Self {
+		Self::IO(value)
 	}
 }
 
