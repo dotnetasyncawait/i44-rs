@@ -65,7 +65,8 @@ static HANDLER: OnceLock<Mutex<Handler>> = OnceLock::new();
 static WORKER: OnceLock<Mutex<Worker>> = OnceLock::new();
 static SUSPENDED: AtomicBool = AtomicBool::new(false);
 
-const HANDLED: LRESULT = LRESULT(1);
+const PROCESS: LRESULT = LRESULT(0);
+const BLOCK: LRESULT = LRESULT(1);
 
 const MENU_MASK_MOD: Mods = Mods::LC;
 const MENU_MASK_KEY: Key = Key::LCTRL;
@@ -227,19 +228,26 @@ impl Handler {
 		// CallNextHookEx can pick up a message from the message queue and re-enter,
 		// or execute Mouse hook (which will try to take the lock and panic).
 		
+		// IMPORTANT: calling the next hook (as mentioned above) may re-enter the hook (if there's an event
+		// in the queue), which can cause the order of processing keys to be broken. When this happens, the
+		// target window receives the re-entered event before the currently processing one (which is waiting
+		// for the CallNextHookEx to return).
+		// For example, decrementing `send_count` on `CALL_NEXT_END` before calling the next hook is a violation,
+		// because the interrupting keys will be sent before we complete our sequence (QMK shifted-symbols case).
+		
 		let s = unsafe { ptr::read(lparam.0 as *const KBDLLHOOKSTRUCT) };
 		
 		match s.dwExtraInfo {
-			CALL_NEXT => return call_next(code, wparam, lparam),
+			CALL_NEXT => return PROCESS,
 			CALL_NEXT_END => {
 				Self::lock_handler().send_count -= 1;
-				return call_next(code, wparam, lparam);
+				return PROCESS;
 			},
 			_ => {}
 		}
 		
 		let Some((key, pressed)) = Self::kb_get_key(&s) else {
-			return call_next(code, wparam, lparam); // injected key
+			return PROCESS; // injected key
 		};
 		
 		let h = Self::lock_handler();
@@ -247,13 +255,13 @@ impl Handler {
 			if !pressed {
 				h.sender.send(InputMsg::Single(INPUT::keybd_up(key, CACHED_EVENT))).unwrap();
 			}
-			return HANDLED;
+			return BLOCK;
 		}
 		
 		if Self::handle_kb(key, pressed, h) {
-			HANDLED
+			BLOCK
 		} else {
-			call_next(code, wparam, lparam)
+			PROCESS
 		}
 	}
 	
@@ -274,7 +282,7 @@ impl Handler {
 		}
 		
 		if s.flags & LLMHF_INJECTED != 0 && s.dwExtraInfo != CACHED_EVENT {
-			return HANDLED;
+			return BLOCK;
 		}
 		
 		let (key, pressed) = Self::ms_get_key(wparam, s.mouseData);
@@ -284,11 +292,11 @@ impl Handler {
 			if !pressed {
 				h.sender.send(InputMsg::Single(INPUT::mouse_up(key, CACHED_EVENT))).unwrap();
 			}
-			return HANDLED;
+			return BLOCK;
 		}
 		
 		if Self::handle_ms(key, pressed, h) {
-			HANDLED
+			BLOCK
 		} else {
 			call_next(code, wparam, lparam)
 		}

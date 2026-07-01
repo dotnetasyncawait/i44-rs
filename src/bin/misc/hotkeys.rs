@@ -155,7 +155,12 @@ fn ls_d() -> HotkeyResult {
 	}.ok()
 }
 
-fn g() -> HotkeyResult { Ok(Suppress) }
+fn g() -> HotkeyResult {
+	match Mode::get() {
+		ModeState::Normal => Ok(Suppress),
+		_ => Ok(Default)
+	}
+}
 
 fn h() -> HotkeyResult {
 	match Mode::get() {
@@ -251,7 +256,12 @@ fn lcs_s() -> HotkeyResult {
 	}.ok()
 }
 
-fn v() -> HotkeyResult { Ok(Suppress) }
+fn v() -> HotkeyResult {
+	match Mode::get() {
+		ModeState::Normal => Ok(Suppress),
+		_ => Ok(Default)
+	}
+}
 
 fn w() -> HotkeyResult {
 	match Mode::get() {
