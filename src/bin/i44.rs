@@ -1,13 +1,14 @@
 mod misc;
 
 use i44::App;
-use misc::{hotkeys::AppExt, mode, kb::{I44, hid_msgs::HID_DEFAULT}, mic};
+use misc::{hotkeys::AppExt, mode, kb::{I44, hid_msgs::HID_DEFAULT}, mic, sound};
 use windows::Win32::{
 	Foundation::{HWND, LPARAM, WPARAM},
 	System::Com::{COINIT_MULTITHREADED, CoInitializeEx},
 	UI::WindowsAndMessaging::{PBT_APMRESUMEAUTOMATIC, WM_POWERBROADCAST}};
 
 fn main() {
+	set_panic_hook();
 	unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).unwrap(); }
 	
 	let app = App::new()
@@ -15,6 +16,7 @@ fn main() {
 		.on_message(WM_POWERBROADCAST, default_kb)
 		.on_exit(|_| _ = I44::disable());
 	
+	sound::init();
 	mode::init();
 	mic::init(&app);
 	
@@ -34,4 +36,18 @@ fn default_kb(_: HWND, _: u32, wparam: WPARAM, _: LPARAM) -> isize {
 	}
 	
 	0
+}
+
+fn set_panic_hook() {
+	use windows::{core::{PCSTR, s}, Win32::UI::WindowsAndMessaging::{MessageBoxA, MB_ICONERROR}};
+	
+	std::panic::set_hook(Box::new(|info| {
+		let loc = info.location().unwrap();
+		
+		let text = format!(
+			"panic at {}:{}:{}: '{}'\0",
+			loc.file(), loc.line(), loc.column(), info.payload_as_str().unwrap_or_default());
+		
+		unsafe { MessageBoxA(None, PCSTR(text.as_ptr()), s!("Error"), MB_ICONERROR); }
+	}));
 }

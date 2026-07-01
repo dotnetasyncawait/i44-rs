@@ -92,6 +92,10 @@ impl Device {
 	}
 	
 	pub fn on_volume_update(&mut self, f: VolumeNotfHandler) -> Result<(), Error> {
+		if self.callback.is_some() {
+			return Err(Error::other("TODO: multiple callbacks"));
+		}
+		
 		let callback: IAudioEndpointVolumeCallback = AudioEndpointVolumeCallback(f).into();
 		unsafe { self.volume.RegisterControlChangeNotify(&callback)? };
 		self.callback = Some(callback);

@@ -97,7 +97,7 @@ impl AppExt for App {
 			.hotkey(Mods::NONE, Key::F7, f7)
 			.hotkey(Mods::NONE, Key::F8, f8)
 			.hotkey(Mods::NONE, Key::F21, f21)
-			.hotkey_exempt(Mods::NONE, Key::F23, f23) // TODO: XAudio2
+			.hotkey_exempt(Mods::NONE, Key::F23, f23)
 	}
 }
 

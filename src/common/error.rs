@@ -1,4 +1,4 @@
-use std::{fmt::Display, string::FromUtf16Error};
+use std::{fmt::Display, str::Utf8Error, string::FromUtf16Error};
 use crate::hid::HidError;
 
 pub type Win32Error = windows::core::Error;
@@ -14,6 +14,12 @@ pub enum Error {
 	Other(String)
 }
 
+impl Error {
+	pub fn other(str: impl Into<String>) -> Self {
+		Self::Other(str.into())
+	}
+}
+
 impl From<Win32Error> for Error {
 	fn from(value: Win32Error) -> Self {
 		Self::Win32(value)
@@ -22,6 +28,12 @@ impl From<Win32Error> for Error {
 
 impl From<FromUtf16Error> for Error {
 	fn from(value: FromUtf16Error) -> Self {
+		Self::Other(value.to_string())
+	}
+}
+
+impl From<Utf8Error> for Error {
+	fn from(value: Utf8Error) -> Self {
 		Self::Other(value.to_string())
 	}
 }
