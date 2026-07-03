@@ -1,0 +1,1 @@
+pub const DESKTOP: &str = concat!(env!("USERPROFILE"), r"\Desktop");	

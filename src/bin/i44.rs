@@ -1,4 +1,5 @@
 mod misc;
+mod system;
 
 use i44::App;
 use misc::{hotkeys::AppExt, mode, kb::{I44, hid_msgs::HID_DEFAULT}, mic, sound};

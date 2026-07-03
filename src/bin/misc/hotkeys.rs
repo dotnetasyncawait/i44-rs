@@ -4,6 +4,7 @@ use i44::misc::{win, helpers};
 use i44::apps::*;
 use i44::App;
 use super::{mode::{Mode, ModeState}, kb::I44, mic};
+use crate::system::paths;
 
 type HotkeyResult = Result<Hotkey, Error>;
 
@@ -19,7 +20,7 @@ impl AppExt for App {
 			.hotkey(Mods::NONE, Key::C, c)
 			.hotkey(Mods::LS,   Key::C, ls_c)
 			.hotkey(Mods::LS,   Key::D, ls_d)
-			// .hotkey(Mods::LW,   Key::E, lw_e) // TODO: Com Shell.Application, Paths
+			.hotkey(Mods::LW,   Key::E, lw_e)
 			.hotkey(Mods::NONE, Key::G, g)
 			.hotkey(Mods::NONE, Key::H, h)
 			.hotkey(Mods::LS,   Key::H, ls_h)
@@ -153,6 +154,11 @@ fn ls_d() -> HotkeyResult {
 		_ => Default
 		
 	}.ok()
+}
+
+fn lw_e() -> HotkeyResult {
+	explorer::open(paths::DESKTOP)?;
+	Ok(Suppress)
 }
 
 fn g() -> HotkeyResult {
