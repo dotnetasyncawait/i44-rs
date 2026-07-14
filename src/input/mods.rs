@@ -42,13 +42,24 @@ impl Mods {
 	
 	pub const LC_RS: Mods = Mods::LC.or(Mods::RS);
 	pub const LS_RS: Mods = Mods::LS.or(Mods::RS);
+	pub const LA_RA: Mods = Mods::LA.or(Mods::RA);
+	pub const LW_RW: Mods = Mods::LW.or(Mods::RW);
+	
+	pub const LCS_RCS: Mods = Mods::LCS.or(Mods::RCS);
+	
+	pub const LCSA_RCSA: Mods = Mods::LCSA.or(Mods::RCSA);
 	
 	const fn or(self, other: Self) -> Self {
 		Self(self.0 | other.0)
 	}
 	
-	pub(super) fn contains(self, other: Self) -> bool {
-		self.0 & other.0 != 0
+	pub(super) fn has(self, rhs: Self) -> bool {
+		debug_assert!(rhs != Mods::NONE);
+		self.0 & rhs.0 == rhs.0
+	}
+	
+	pub(super) fn has_any(self, rhs: Self) -> bool {
+		self.0 & rhs.0 != 0
 	}
 	
 	pub(super) fn count_ones(self) -> u32 {
@@ -57,6 +68,10 @@ impl Mods {
 	
 	pub(super) fn is_none(self) -> bool {
 		self == Self::NONE
+	}
+	
+	pub(super) fn is_any(self) -> bool {
+		self != Self::NONE
 	}
 }
 

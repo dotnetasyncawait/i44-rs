@@ -23,6 +23,8 @@ pub struct Handler {
 	v_mods: Mods,
 	send_count: u8,
 	sender: mpsc::Sender<InputMsg>,
+	last_mod: Mods,
+	last_h_mods: Mods,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -67,9 +69,6 @@ static SUSPENDED: AtomicBool = AtomicBool::new(false);
 
 const PROCESS: LRESULT = LRESULT(0);
 const BLOCK: LRESULT = LRESULT(1);
-
-const MENU_MASK_MOD: Mods = Mods::LC;
-const MENU_MASK_KEY: Key = Key::LCTRL;
 
 pub fn wait() -> i8 {
 	let Some(worker) = WORKER.get() else {
@@ -126,7 +125,9 @@ impl Handler {
 			curr_h: None,
 			v_mods: Mods::NONE,
 			send_count: 0,
-			sender: placeholder
+			sender: placeholder,
+			last_mod: Mods::NONE,
+			last_h_mods: Mods::NONE,
 		}
 	}
 	
@@ -307,17 +308,37 @@ impl Handler {
 		
 		if pressed {
 			if Self::kb_key_down(key, mod_bit, &mut h) {
-				return true;
+				true
+			} else {
+				h.last_mod = mod_bit;
+				h.v_mods |= mod_bit;
+				false
 			}
-			h.v_mods |= mod_bit;
 		} else {
 			if Self::kb_key_up(key, mod_bit, &mut h) {
 				return true;
 			}
+			if mod_bit.is_none() {
+				return false;
+			}
+			
+			let mut masked = false;
+			if h.last_mod == mod_bit && h.last_h_mods.has_any(mod_bit) && should_mask_last(mod_bit, h.v_mods) {
+				let ib = InputBuilder::with_capacity(3)
+					.key_down(Key::LCTRL)
+					.key_up(key)
+					.key_up(Key::LCTRL);
+				
+				h.send_count += 1;
+				h.sender.send(InputMsg::Many(ib.build())).unwrap();
+				masked = true;
+			}
+			
 			h.v_mods &= !mod_bit;
+			h.last_h_mods &= !mod_bit;
+			h.last_mod = Mods::NONE;
+			masked
 		}
-		
-		false
 	}
 	
 	fn handle_ms(key: Key, pressed: bool, mut h: MutexGuard<'_, Handler>) -> bool {
@@ -351,67 +372,68 @@ impl Handler {
 			}
 		};
 		
+		h.last_h_mods = entry.mods;
+		
 		match hotkey {
 			Hotkey::Default => false,
 			Hotkey::Suppress | Hotkey::SuppressOnce => true,
 			Hotkey::Remap(r_mods, r_key) => {
 				let remap_mod_bit = Self::get_mod(r_key);
+				let remap = KeyMods::new(r_mods, r_key);
+				
 				let mut entry_mods = entry.mods & !(r_mods | remap_mod_bit);
 				let mut remap_mods = r_mods & !entry.mods;
 				let mut entry_mods_2 = entry_mods;
 				let mut remap_mods_2 = remap_mods;
 				
-				let ((mask_down, mask_up), mask_up_2) = if (entry.mods & r_mods).contains(MENU_MASK_MOD) {
-					((false, false), false)
-				} else {
-					(
-						Self::remap_mask_start(r_key, &mut entry_mods, &mut remap_mods),
-						Self::remap_mask_end(&mut remap_mods_2, &mut entry_mods_2)
-					)
-				};
-				
+				let (mask, pre_mask, post_mask) = mask_remap_start(&mut entry_mods, &mut remap_mods, entry);
+				let (mask_2, pre_mask_2, post_mask_2) = mask_remap_end(&mut remap_mods_2, &mut entry_mods_2, remap);
 				let is_wheel = r_key.is_mouse_wheel();
-				let size = mask_down as u32
+				
+				let size = pre_mask as u32
 					+ (entry_mods | remap_mods).count_ones()
-					+ mask_up as u32
+					+ post_mask as u32
 					+ 1
 					+ !is_wheel as u32
+					+ pre_mask_2 as u32
 					+ (remap_mods_2 | entry_mods_2).count_ones()
-					+ mask_up_2 as u32;
+					+ post_mask_2 as u32;
 				
-				let inputs = InputBuilder::with_capacity(size as _)
-					.key_down_if(MENU_MASK_KEY, mask_down)
+				let ib = InputBuilder::with_capacity(size as _)
+					.key_down_if(mask, pre_mask)
 					.mods_up(entry_mods)
 					.mods_down(remap_mods)
-					.key_up_if(MENU_MASK_KEY, mask_up)
+					.key_up_if(mask, post_mask)
 					.key_down(r_key)
 					.key_up_if(r_key, !is_wheel)
+					.key_down_if(mask_2, pre_mask_2)
 					.mods_up(remap_mods_2)
 					.mods_down(entry_mods_2)
-					.key_up_if(MENU_MASK_KEY, mask_up_2)
-					.build();
+					.key_up_if(mask_2, post_mask_2);
 				
+				h.last_mod = if !post_mask_2 { get_last_mod(entry_mods_2) } else { Mods::NONE };
 				h.send_count += 1;
-				h.sender.send(InputMsg::Many(inputs)).unwrap();
+				h.sender.send(InputMsg::Many(ib.build())).unwrap();
 				true
 			},
 			Hotkey::Unicode(str) => {
-				let encoded = str.encode_utf16().collect::<Vec<u16>>();
+				let encoded: Vec<u16> = str.encode_utf16().collect();
 				let entry_mods = entry.mods;
-				let should_mask = Self::should_mask(entry_mods);
-				let size = (entry_mods.count_ones() + (should_mask as u32 * 2) + encoded.len() as u32) * 2;
+				
+				let should_mask = h.last_mod.is_any() && matches!(project_mods(entry_mods), Mods::LA_RA | Mods::LW_RW);
+				let size = (entry_mods.count_ones() + encoded.len() as u32) * 2 + (should_mask as u32 * 2);
 				
 				if size != 0 {
 					let inputs = InputBuilder::with_capacity(size as _)
 						.mods_up_masked(entry_mods, should_mask)
 						.add_unicode(encoded)
-						.mods_down_masked(entry_mods, should_mask)
+						.mods_down(entry_mods)
 						.build();
 					
+					h.last_mod = get_last_mod(entry_mods);
 					h.send_count += 1;
 					h.sender.send(InputMsg::Many(inputs)).unwrap();
 				}
-				
 				true
 			},
 			Hotkey::Action(action) => {
@@ -428,7 +450,6 @@ impl Handler {
 						println!("From action: {err:?}; ({entry:?})"); // TODO: display the error with a window
 					}
 				});
-				
 				true
 			},
 			Hotkey::ActionRepeat(action) => {
@@ -480,8 +501,8 @@ impl Handler {
 				CurrHotkey::Default(entry) => Self::kb_default_up(*entry, key, mod_bit, h),
 				CurrHotkey::Remap(entry, remap) => Self::kb_remap_up(*entry, *remap, key, mod_bit, h),
 				CurrHotkey::Unicode(entry, _) => Self::kb_unicode_up(*entry, key, mod_bit, h),
-				CurrHotkey::Action(entry, notf) => Self::kb_action_up(*entry, notf.clone(), key, h),
-				CurrHotkey::ActionRepeat(entry, _) => Self::kb_action_r_up(*entry, key, h),
+				CurrHotkey::Action(entry, notf) => Self::kb_action_up(*entry, notf.clone(), key, mod_bit, h),
+				CurrHotkey::ActionRepeat(entry, _) => Self::kb_action_r_up(*entry, key, mod_bit, h),
 			},
 			None => false
 		}
@@ -497,19 +518,20 @@ impl Handler {
 			false
 		} else {
 			// TODO: map hotkey if there's a match
-			entry.mods.contains(mod_bit)
+			entry.mods.has_any(mod_bit)
 		}
 	}
 	
 	fn kb_default_up(entry: KeyMods, key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool {
-		if entry.key == key || entry.mods.contains(mod_bit) {
+		if entry.key == key || entry.mods.has_any(mod_bit) {
 			h.curr_h = None;
 		}
 		false
 	}
 	
-	fn kb_suppress(key: Key, h: &mut MutexGuard<'_, Handler>, once: bool) -> bool {
-		h.suppressed.insert(key, once);
+	fn kb_suppress(entry: KeyMods, h: &mut MutexGuard<'_, Handler>, once: bool) -> bool {
+		h.suppressed.insert(entry.key, once);
+		h.last_h_mods = entry.mods;
 		true
 	}
 	
@@ -518,22 +540,18 @@ impl Handler {
 		let mut mods_to_release = entry.mods & !(remap.mods | remap_mod_bit);
 		let mut mods_to_press = remap.mods & !entry.mods;
 		
-		let (mask_down, mask_up) = if (remap.mods & entry.mods).contains(MENU_MASK_MOD) {
-			(false, false)
-		} else {
-			Self::remap_mask_start(remap.key, &mut mods_to_release, &mut mods_to_press)
-		};
-		
-		let size = mask_down as u32 + (mods_to_release | mods_to_press).count_ones() + mask_up as u32 + 1;
+		let (mask, pre_mask, post_mask) = mask_remap_start(&mut mods_to_release, &mut mods_to_press, entry);
+		let size = pre_mask as u32 + (mods_to_release | mods_to_press).count_ones() + post_mask as u32 + 1;
 		
 		let inputs = InputBuilder::with_capacity(size as _)
-			.key_down_if(MENU_MASK_KEY, mask_down)
+			.key_down_if(mask, pre_mask)
 			.mods_up(mods_to_release)
 			.mods_down(mods_to_press)
-			.key_up_if(MENU_MASK_KEY, mask_up)
+			.key_up_if(mask, post_mask)
 			.key_down(remap.key)
 			.build();
 		
+		// h.last_mod = if !post_mask && remap.key.is_mouse_key() { get_last_mod(mods_to_press) } else { Mods::NONE };
 		h.v_mods = remap.mods | remap_mod_bit;
 		h.curr_h = Some(CurrHotkey::Remap(entry, remap));
 		h.send_count += 1;
@@ -543,70 +561,48 @@ impl Handler {
 	}
 	
 	fn kb_remap_up(entry: KeyMods, remap: KeyMods, key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool {
-		if key == entry.key {
-			let key_to_release = remap.key;
-			let mut mods_to_release = remap.mods & !entry.mods;
-			let mut mods_to_restore = entry.mods & !remap.mods;
-			
-			h.curr_h = None;
-			h.v_mods = h.v_mods & !(mods_to_release | Self::get_mod(key_to_release)) | mods_to_restore;
-			
-			let mask_up = if (entry.mods & remap.mods).contains(MENU_MASK_MOD) {
-				false
-			} else {
-				Self::remap_mask_end(&mut mods_to_release, &mut mods_to_restore)
-			};
-			let is_wheel = key_to_release.is_mouse_wheel();
-			let size = !is_wheel as u32 + (mods_to_release | mods_to_restore).count_ones() + mask_up as u32;
-			
-			if size != 0 {
-				let inputs = InputBuilder::with_capacity(size as _)
-					.key_up_if(key_to_release, !is_wheel)
-					.mods_up(mods_to_release)
-					.mods_down(mods_to_restore)
-					.key_up_if(MENU_MASK_KEY, mask_up)
-					.build();
-				
-				h.send_count += 1;
-				h.sender.send(InputMsg::Many(inputs)).unwrap();
-			}
-			
-			return true;
-		}
+		let key_to_release = remap.key;
 		
-		if entry.mods.contains(mod_bit) {
-			let key_to_release = remap.key;
-			let mut mods_to_release = remap.mods & (!entry.mods | mod_bit);
-			let mut mods_to_restore = entry.mods & !(remap.mods | mod_bit);
-			
-			h.curr_h = None;
-			h.v_mods = h.v_mods & !(mods_to_release | Self::get_mod(key_to_release)) | mods_to_restore;
+		let (mut mods_to_release, mut mods_to_restore, last_h_mods) = if key == entry.key {
+			( remap.mods & !entry.mods,
+				entry.mods & !remap.mods,
+				entry.mods)
+		} else if entry.mods.has_any(mod_bit) {
 			h.suppressed.insert(entry.key, false);
+			( remap.mods & (!entry.mods | mod_bit),
+				entry.mods & !(remap.mods | mod_bit),
+				entry.mods & !mod_bit)
+		} else {
+			return false;
+		};
+		
+		h.curr_h = None;
+		h.v_mods = h.v_mods & !(mods_to_release | Self::get_mod(key_to_release)) | mods_to_restore;
+		
+		let is_wheel = key_to_release.is_mouse_wheel();
+		let (mask, pre_mask, post_mask) = mask_remap_end(&mut mods_to_release, &mut mods_to_restore, remap);
+		
+		let size = !is_wheel as u32
+			+ pre_mask as u32
+			+ (mods_to_release | mods_to_restore).count_ones()
+			+ post_mask as u32;
+		
+		if size != 0 {
+			let inputs = InputBuilder::with_capacity(size as _)
+				.key_up_if(key_to_release, !is_wheel)
+				.key_down_if(mask, pre_mask)
+				.mods_up(mods_to_release)
+				.mods_down(mods_to_restore)
+				.key_up_if(mask, post_mask)
+				.build();
 			
-			let mask_up = if ((entry.mods & remap.mods) & !mod_bit).contains(MENU_MASK_MOD) {
-				false
-			} else {
-				Self::remap_mask_end(&mut mods_to_release, &mut mods_to_restore)
-			};
-			let is_wheel = key_to_release.is_mouse_wheel();
-			let size = !is_wheel as u32 + (mods_to_release | mods_to_restore).count_ones() + mask_up as u32;
-			
-			if size != 0 {
-				let inputs = InputBuilder::with_capacity(size as _)
-					.key_up_if(key_to_release, !is_wheel)
-					.mods_up(mods_to_release)
-					.mods_down(mods_to_restore)
-					.key_up_if(MENU_MASK_KEY, mask_up)
-					.build();
-				
-				h.send_count += 1;
-				h.sender.send(InputMsg::Many(inputs)).unwrap();
-			}
-			
-			return true;
+			h.last_h_mods = last_h_mods;
+			h.last_mod = if !post_mask { get_last_mod(mods_to_restore) } else { Mods::NONE };
+			h.send_count += 1;
+			h.sender.send(InputMsg::Many(inputs)).unwrap();
 		}
 		
-		false
+		true
 	}
 	
 	fn kb_remap_repeat(entry: KeyMods, remap: KeyMods, key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool {
@@ -633,7 +629,7 @@ impl Handler {
 			};
 		}
 		
-		if entry.mods.contains(mod_bit) { // suppress repeated entry mods (Qmk KeyOverrides issue)
+		if entry.mods.has_any(mod_bit) { // suppress repeated entry mods (Qmk KeyOverrides issue)
 			return true;
 		}
 		
@@ -657,17 +653,21 @@ impl Handler {
 		let mut mods_to_release = remap.mods & !entry.mods;
 		let mut mods_to_restore = entry.mods & !remap.mods;
 		
-		let mask_up = Self::remap_mask_end(&mut mods_to_release, &mut mods_to_restore);
-		
 		let is_wheel = key_to_release.is_mouse_wheel();
-		let size = !is_wheel as u32 + (mods_to_release | mods_to_restore).count_ones() + mask_up as u32;
+		let (mask, pre_mask, post_mask) = mask_remap_end(&mut mods_to_release, &mut mods_to_restore, remap);
+		
+		let size = !is_wheel as u32
+			+ pre_mask as u32
+			+ (mods_to_release | mods_to_restore).count_ones()
+			+ post_mask as u32;
 		
 		if size != 0 {
 			let inputs = InputBuilder::with_capacity(size as _)
 				.key_up_if(key_to_release, !is_wheel)
+				.key_down_if(mask, pre_mask)
 				.mods_up(mods_to_release)
 				.mods_down(mods_to_restore)
-				.key_up_if(MENU_MASK_KEY, mask_up)
+				.key_up_if(mask, post_mask)
 				.build();
 			
 			h.send_count += 1;
@@ -679,7 +679,7 @@ impl Handler {
 	
 	fn kb_unicode(entry: KeyMods, str: &'static str, h: &mut MutexGuard<'_, Handler>) -> bool {
 		if str.len() == 0 {
-			return true; // same as Hotkey::Suppress
+			return true;
 		}
 		
 		let inputs = Arc::new(InputBuilder::unicode(str));
@@ -688,8 +688,8 @@ impl Handler {
 		h.v_mods = Mods::NONE;
 		h.curr_h = Some(CurrHotkey::Unicode(entry, Arc::clone(&inputs)));
 		
-		if !mods_to_release.is_none() {
-			let should_mask = Self::should_mask(mods_to_release);
+		if mods_to_release.is_any() {
+			let should_mask = h.last_mod.is_any() && matches!(project_mods(mods_to_release), Mods::LA_RA | Mods::LW_RW);
 			let size = mods_to_release.count_ones() + (should_mask as u32 * 2);
 			
 			let keys = InputBuilder::with_capacity(size as _)
@@ -710,7 +710,7 @@ impl Handler {
 		
 		if key == entry.key {
 			mods_to_restore = entry.mods;
-		} else if entry.mods.contains(mod_bit) {
+		} else if entry.mods.has_any(mod_bit) {
 			mods_to_restore = entry.mods & !mod_bit;
 			h.suppressed.insert(entry.key, false);
 		} else {
@@ -721,13 +721,12 @@ impl Handler {
 		h.v_mods |= mods_to_restore;
 		
 		if !mods_to_restore.is_none() {
-			let should_mask = Self::should_mask(mods_to_restore);
-			let size = mods_to_restore.count_ones() + (should_mask as u32 * 2);
-			
-			let inputs = InputBuilder::with_capacity(size as _)
-				.mods_down_masked(mods_to_restore, should_mask)
+			let inputs = InputBuilder::with_capacity(mods_to_restore.count_ones() as _)
+				.mods_down(mods_to_restore)
 				.build();
 			
+			h.last_h_mods = mods_to_restore;
+			h.last_mod = get_last_mod(mods_to_restore);
 			h.send_count += 1;
 			h.sender.send(InputMsg::Many(inputs)).unwrap();
 		}
@@ -744,7 +743,7 @@ impl Handler {
 			return true;
 		}
 		
-		if entry.mods.contains(mod_bit) {
+		if entry.mods.has_any(mod_bit) {
 			return true;
 		}
 		
@@ -754,6 +753,8 @@ impl Handler {
 			return false;
 		};
 		
+		// interrupt
+		
 		let mods_to_restore = entry.mods;
 		
 		h.curr_h = None;
@@ -761,11 +762,8 @@ impl Handler {
 		h.suppressed.insert(entry.key, false);
 		
 		if !mods_to_restore.is_none() {
-			let should_mask = Self::should_mask(mods_to_restore);
-			let size = mods_to_restore.count_ones() + (should_mask as u32 * 2);
-			
-			let inputs = InputBuilder::with_capacity(size as _)
-				.mods_down_masked(mods_to_restore, should_mask)
+			let inputs = InputBuilder::with_capacity(mods_to_restore.count_ones() as _)
+				.mods_down(mods_to_restore)
 				.build();
 			
 			h.send_count += 1;
@@ -788,18 +786,14 @@ impl Handler {
 		true
 	}
 	
-	fn kb_action_up(entry: KeyMods, notf: KeyEventNotifier, key: Key, h: &mut MutexGuard<'_, Handler>) -> bool {
-		if key == entry.key {
-			notf.notify();
-			h.curr_h = None;
-			true
-		} else {
-			false
-		}
+	fn kb_action_up(
+		entry: KeyMods, notf: KeyEventNotifier, key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool
+	{
+		Self::kb_action_up_common(|| notf.notify(), entry, key, mod_bit, h)
 	}
 	
 	fn kb_action_repeat(entry: KeyMods, key: Key, mod_bit: Mods) -> bool {
-		key == entry.key || entry.mods.contains(mod_bit)
+		key == entry.key || entry.mods.has_any(mod_bit)
 	}
 	
 	fn kb_action_r(entry: KeyMods, action: fn() -> Result<(), Error>, h: &mut MutexGuard<'_, Handler>) -> bool {
@@ -821,13 +815,8 @@ impl Handler {
 		true
 	}
 	
-	fn kb_action_r_up(entry: KeyMods, key: Key, h: &mut MutexGuard<'_, Handler>) -> bool {
-		if key == entry.key {
-			h.curr_h = None;
-			true
-		} else {
-			false
-		}
+	fn kb_action_r_up(entry: KeyMods, key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool {
+		Self::kb_action_up_common(|| {}, entry, key, mod_bit, h)
 	}
 	
 	fn kb_action_r_repeat(entry: KeyMods, sender: &SyncSender<()>, key: Key, mod_bit: Mods) -> bool {
@@ -835,75 +824,43 @@ impl Handler {
 			if let Err(err) = sender.try_send(()) && err == TrySendError::Disconnected(()) {
 				panic!("Receiver 'ActionRepeat' disconnected");
 			}
-			return true;
+			true
+		} else {
+			entry.mods.has_any(mod_bit)
 		}
-		
-		entry.mods.contains(mod_bit)
 	}
 	
-	fn remap_mask_start(r_key: Key, up: &mut Mods, down: &mut Mods) -> (bool, bool) {
-		// masking rules:
-		// - mask UP mods on hotkey start
-		// - mask DOWN mods on hotkey end
-		// - mask DOWN mods on hotkey start IF remap.key is mouse key (only wheel?) (eg: (...) -> (A, ms_key))
-		// 
-		// strategies:
-		// - if UP mods should be masked -> mask down and append mask to release mods:
-		//   (A, key) -> (S, r_key): (C down, A up, C up) (S down);
-		// - if UP mods should be masked AND r_key is mouse key and DOWN mods should be masked (rule 3) -> mask both:
-		//   (A, key) -> (W, ms_key): (C down, A up) (W down, C up);
-		// - if UP mods should NOT be masked (while rule 3 applies) -> prepend mask to DOWN mods and release it last:
-		//   (S, key) -> (W, ms_key): (S up) (C down, W down, C up);
-		// 
-		// in general:
-		// - if UP mods should be masked and DOWN mods have mask -> press that mask at the beginning:
-		//   (A, key) -> (C, r_key): (C down, A up) ();
-		// - if DOWN mods should be masked and UP mods have mask -> release that mask at the end:
-		//   (C, key) -> (A, r_key): () (A down, C up);
-		
-		let mut mask_up = false;
-		let mask_down = Self::should_mask(*up);
-		
-		if mask_down {
-			if down.contains(MENU_MASK_MOD) {
-				*down &= !MENU_MASK_MOD;
-			} else {
-				if r_key.is_mouse_key() && Self::should_mask(*down) {
-					mask_up = true;
-				} else {
-					*up |= MENU_MASK_MOD; // append (mask will be released last)
-				}
-			}
-		} else if r_key.is_mouse_key() && Self::should_mask(*down) {
-			if up.contains(MENU_MASK_MOD) {
-				*up &= !MENU_MASK_MOD;
-			} else {
-				*down |= MENU_MASK_MOD; // prepend (mask will be pressed first)
-			}
-			mask_up = true;
+	fn kb_action_up_common(
+		on_key_up: impl FnOnce(), entry: KeyMods, key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool
+	{
+		if key == entry.key {
+			on_key_up();
+			h.curr_h = None;
+			h.last_h_mods = entry.mods & h.v_mods;
+			true
+		} else if entry.mods.has_any(mod_bit) && mod_bit == h.last_mod && should_mask_last(mod_bit, h.v_mods) {
+			let ib = InputBuilder::with_capacity(3)
+				.key_down(Key::LCTRL)
+				.key_up(key)
+				.key_up(Key::LCTRL);
+			
+			h.v_mods &= !mod_bit;
+			h.last_h_mods &= !mod_bit;
+			h.last_mod = Mods::NONE;
+			h.send_count += 1;
+			h.sender.send(InputMsg::Many(ib.build())).unwrap();
+			true
+		} else {
+			false
 		}
-		
-		(mask_down, mask_up)
-	}
-	
-	fn remap_mask_end(up: &mut Mods, down: &mut Mods) -> bool {
-		let mask_up = Self::should_mask(*down);
-		if mask_up {
-			if up.contains(MENU_MASK_MOD) {
-				*up &= !MENU_MASK_MOD;
-			} else {
-				*down |= MENU_MASK_MOD; // prepend
-			}
-		}
-		mask_up
 	}
 	
 	fn map_hotkey(f: fn() -> Result<Hotkey, Error>, entry: KeyMods, h: &mut MutexGuard<'_, Handler>) -> bool {
 		match f() {
 			Ok(hotkey) => match hotkey {
 				Hotkey::Default => Self::kb_default(entry, h),
-				Hotkey::Suppress => Self::kb_suppress(entry.key, h, false),
-				Hotkey::SuppressOnce => Self::kb_suppress(entry.key, h, true),
+				Hotkey::Suppress => Self::kb_suppress(entry, h, false),
+				Hotkey::SuppressOnce => Self::kb_suppress(entry, h, true),
 				Hotkey::Remap(mods, key) => Self::kb_remap(entry, KeyMods::new(mods, key), h),
 				Hotkey::Unicode(str) => Self::kb_unicode(entry, str, h),
 				Hotkey::Action(action) => Self::kb_action(entry, action, h),
@@ -938,10 +895,6 @@ impl Handler {
 		}
 	}
 	
-	fn should_mask(mods: Mods) -> bool {
-		mods.contains(Mods::LAW | Mods::RAW) && !mods.contains(Mods::LC | Mods::RC)
-	}
-	
 	fn mq_handler(tx: mpsc::Sender<u32>) {
 		let thread_id = unsafe { GetCurrentThreadId() };
 		tx.send(thread_id).unwrap();
@@ -963,6 +916,104 @@ impl Handler {
 					_ = unsafe { DispatchMessageW(&msg) };
 				}
 			}
+		}
+	}
+}
+
+fn get_last_mod(mods: Mods) -> Mods {
+	if mods.is_none() {
+		return mods;
+	}
+	
+	const BITS: [u8; 16] = [ 0, 1, 2, 2, 4, 4, 4, 4, 8, 8, 8, 8, 8, 8, 8, 8 ];
+	
+	let r = BITS[(mods.0 >> 4) as usize];
+	let l = BITS[(mods.0 & 0xF) as usize];
+	
+	Mods(if r >= l { r << 4 } else { l })
+}
+
+fn get_mod_except(exclude: Mods, mods: Mods) -> Option<KeyMods> {
+	let mods = mods & !exclude;
+	if mods.is_none() {
+		return None;
+	}
+	
+	const MODS: [(Mods, Key, Key); 4] = [
+		(Mods::LC, Key::LCTRL,  Key::RCTRL),
+		(Mods::LS, Key::LSHIFT, Key::RSHIFT),
+		(Mods::LA, Key::LALT,   Key::RALT),
+		(Mods::LW, Key::LWIN,   Key::RWIN)
+	];
+	
+	let l = mods.0 & 0xF;
+	let r = mods.0 >> 4;
+	
+	let l = l & l.wrapping_neg(); // get the lowest bit
+	let r = r & r.wrapping_neg();
+	
+	Some(if r == 0 || (l != 0 && l <= r) {
+		let (mods, l_key, _) = MODS[l.trailing_zeros() as usize];
+		KeyMods::new(mods, l_key)
+	} else {
+		let (mods, _, r_key) = MODS[r.trailing_zeros() as usize];
+		KeyMods::new(Mods(mods.0 << 4), r_key)
+	})
+}
+
+fn project_mods(mod_bit: Mods) -> Mods {
+	Mods(((mod_bit.0 >> 4) | (mod_bit.0 & 0xF)) * 0x11)
+}
+
+fn should_mask_last(last_mod: Mods, curr_mods: Mods) -> bool {
+	if last_mod.has_any(Mods::LA_RA) {
+		!curr_mods.has_any(Mods::LCS_RCS)
+	} else if last_mod.has_any(Mods::LW_RW) {
+		!curr_mods.has_any(Mods::LCSA_RCSA)
+	} else {
+		false
+	}
+}
+
+fn should_mask_projected(mods_up: Mods, curr_mods: Mods) -> bool {
+	debug_assert!((mods_up.0 >> 4) == (mods_up.0 & 0xF), "mods must be projected: {:?}", mods_up);
+	matches!(mods_up, Mods::LA_RA | Mods::LW_RW) && (curr_mods & !mods_up).0 == 0
+}
+
+fn mask_remap_start(mods_up: &mut Mods, mods_down: &mut Mods, entry: KeyMods) -> (Key, bool, bool) {
+	let mods = project_mods(*mods_up);
+	mask_remap(should_mask_projected(mods, entry.mods), mods, mods_up, mods_down)
+}
+
+fn mask_remap_end(mods_up: &mut Mods, mods_down: &mut Mods, remap: KeyMods) -> (Key, bool, bool) {
+	let mods = project_mods(*mods_up);
+	mask_remap(remap.key.is_mouse_key() && should_mask_projected(mods, remap.mods), mods, mods_up, mods_down)
+}
+
+fn mask_remap(should_mask: bool, pr_mods: Mods, mods_up: &mut Mods, mods_down: &mut Mods) -> (Key, bool, bool) {
+	//    (k|m) -> (k|m)
+	// (W, k|m) -> (k|m):    entry needs mask
+	// (W, k|m) -> (C, k|m): entry needs mask + remap has it 
+	// (W, k|m) -> (A, k|m): entry and remap need mask
+	
+	//    (k|m) -> (W, k|m): remap needs mask
+	// (C, k|m) -> (W, k|m): remap needs mask + entry has it 
+	// (A, k|m) -> (W, k|m): entry and remap need mask
+	
+	if should_mask {
+		if let Some(mask) = get_mod_except(pr_mods, *mods_down) {
+			*mods_down &= !mask.mods;
+			(mask.key, true, false)
+		} else {
+			(Key::LCTRL, true, true)
+		}
+	} else {
+		// If unconditionally masking 'mods_down' turns out to be a problem – fix here:
+		if let Some(mask) = get_mod_except(project_mods(*mods_down), *mods_up) {
+			*mods_up &= !mask.mods;
+			(mask.key, false, true)
+		} else {
+			(Key::NONE, false, false)
 		}
 	}
 }

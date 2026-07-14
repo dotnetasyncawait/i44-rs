@@ -10,6 +10,8 @@ impl Debug for Key {
 }
 
 impl Key {
+	pub const NONE: Key = Key(0);
+	
 	pub const A: Key = Key(0x001E); // Letters
 	pub const B: Key = Key(0x0030);
 	pub const C: Key = Key(0x002E);

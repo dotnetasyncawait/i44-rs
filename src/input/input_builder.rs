@@ -1,5 +1,5 @@
-use windows::Win32::UI::Input::KeyboardAndMouse::{INPUT, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS,
-	KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE};
+use windows::Win32::UI::Input::KeyboardAndMouse::{INPUT, INPUT_KEYBOARD, INPUT_MOUSE, KEYEVENTF_EXTENDEDKEY,
+	KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE};
 use super::{mods::Mods, keys::Key, extensions::InputExt, constants::{CALL_NEXT, CALL_NEXT_END}};
 
 pub struct InputBuilder {
@@ -76,56 +76,57 @@ impl InputBuilder {
 	
 	pub fn mods_down(mut self, mods: Mods) -> Self {
 		if !mods.is_none() {
-			self.add_mods(mods, true, false);
-		}
-		self
-	}
-	
-	pub fn mods_down_masked(mut self, mods: Mods, to_mask: bool) -> Self {
-		if !mods.is_none() {
-			self.add_mods(mods, true, to_mask);
+			self.add_mods(mods, true);
 		}
 		self
 	}
 	
 	pub fn mods_up(mut self, mods: Mods) -> Self {
 		if !mods.is_none() {
-			self.add_mods(mods, false, false);
+			self.add_mods(mods, false);
 		}
 		self
 	}
 	
-	pub fn mods_up_masked(mut self, mods: Mods, to_mask: bool) -> Self {
+	pub fn mods_up_masked(mut self, mods: Mods, should_mask: bool) -> Self {
 		if !mods.is_none() {
-			self.add_mods(mods, false, to_mask);
+			if should_mask {
+				self.buf.push(INPUT::new_keybd(Key::LCTRL.0, KEYEVENTF_SCANCODE, CALL_NEXT));
+				self.add_mods(mods, false);
+				self.buf.push(INPUT::new_keybd(Key::LCTRL.0, KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP, CALL_NEXT));
+			} else {
+				self.add_mods(mods, false);
+			}
 		}
 		self
 	}
 	
-	fn add_mods(&mut self, mods: Mods, pressed: bool, to_mask: bool) {
-		let f = KEYEVENTF_SCANCODE | if pressed { KEYBD_EVENT_FLAGS(0) } else { KEYEVENTF_KEYUP };
-		let f_ex = f | KEYEVENTF_EXTENDEDKEY;
-		
-		if to_mask { self.buf.push(INPUT::keybd_down(Key::LCTRL, CALL_NEXT)); }
-		
+	fn add_mods(&mut self, mods: Mods, pressed: bool) {
 		if pressed {
-			if mods.contains(Mods::LC) { self.buf.push(INPUT::new_keybd(Key::LCTRL.0, f,    CALL_NEXT)) };
-			if mods.contains(Mods::RC) { self.buf.push(INPUT::new_keybd(Key::RCTRL.0, f_ex, CALL_NEXT)) };
+			let f = KEYEVENTF_SCANCODE;
+			let f_ex = f | KEYEVENTF_EXTENDEDKEY;
+			
+			if mods.has(Mods::LC) { self.buf.push(INPUT::new_keybd(Key::LCTRL.0,  f,    CALL_NEXT)) };
+			if mods.has(Mods::RC) { self.buf.push(INPUT::new_keybd(Key::RCTRL.0,  f_ex, CALL_NEXT)) };
+			if mods.has(Mods::LS) { self.buf.push(INPUT::new_keybd(Key::LSHIFT.0, f,    CALL_NEXT)) };
+			if mods.has(Mods::RS) { self.buf.push(INPUT::new_keybd(Key::RSHIFT.0, f,    CALL_NEXT)) };
+			if mods.has(Mods::LA) { self.buf.push(INPUT::new_keybd(Key::LALT.0,   f,    CALL_NEXT)) };
+			if mods.has(Mods::RA) { self.buf.push(INPUT::new_keybd(Key::RALT.0,   f_ex, CALL_NEXT)) };
+			if mods.has(Mods::LW) { self.buf.push(INPUT::new_keybd(Key::LWIN.0,   f_ex, CALL_NEXT)) };
+			if mods.has(Mods::RW) { self.buf.push(INPUT::new_keybd(Key::RWIN.0,   f_ex, CALL_NEXT)) };
+		} else {
+			let f = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
+			let f_ex = f | KEYEVENTF_EXTENDEDKEY;
+			
+			if mods.has(Mods::RW) { self.buf.push(INPUT::new_keybd(Key::RWIN.0,   f_ex, CALL_NEXT)) };
+			if mods.has(Mods::LW) { self.buf.push(INPUT::new_keybd(Key::LWIN.0,   f_ex, CALL_NEXT)) };
+			if mods.has(Mods::RA) { self.buf.push(INPUT::new_keybd(Key::RALT.0,   f_ex, CALL_NEXT)) };
+			if mods.has(Mods::LA) { self.buf.push(INPUT::new_keybd(Key::LALT.0,   f,    CALL_NEXT)) };
+			if mods.has(Mods::RS) { self.buf.push(INPUT::new_keybd(Key::RSHIFT.0, f,    CALL_NEXT)) };
+			if mods.has(Mods::LS) { self.buf.push(INPUT::new_keybd(Key::LSHIFT.0, f,    CALL_NEXT)) };
+			if mods.has(Mods::RC) { self.buf.push(INPUT::new_keybd(Key::RCTRL.0,  f_ex, CALL_NEXT)) };
+			if mods.has(Mods::LC) { self.buf.push(INPUT::new_keybd(Key::LCTRL.0,  f,    CALL_NEXT)) };
 		}
-		
-		if mods.contains(Mods::LS) { self.buf.push(INPUT::new_keybd(Key::LSHIFT.0, f,    CALL_NEXT)) };
-		if mods.contains(Mods::LA) { self.buf.push(INPUT::new_keybd(Key::LALT.0,   f,    CALL_NEXT)) };
-		if mods.contains(Mods::LW) { self.buf.push(INPUT::new_keybd(Key::LWIN.0,   f_ex, CALL_NEXT)) };
-		if mods.contains(Mods::RS) { self.buf.push(INPUT::new_keybd(Key::RSHIFT.0, f,    CALL_NEXT)) };
-		if mods.contains(Mods::RA) { self.buf.push(INPUT::new_keybd(Key::RALT.0,   f_ex, CALL_NEXT)) };
-		if mods.contains(Mods::RW) { self.buf.push(INPUT::new_keybd(Key::RWIN.0,   f_ex, CALL_NEXT)) };
-		
-		if !pressed {
-			if mods.contains(Mods::LC) { self.buf.push(INPUT::new_keybd(Key::LCTRL.0, f,    CALL_NEXT)) };
-			if mods.contains(Mods::RC) { self.buf.push(INPUT::new_keybd(Key::RCTRL.0, f_ex, CALL_NEXT)) };
-		}
-		
-		if to_mask { self.buf.push(INPUT::keybd_up(Key::LCTRL, CALL_NEXT)); }
 	}
 	
 	pub fn build(mut self) -> Vec<INPUT> {
