@@ -11,6 +11,7 @@ features = [
 	"Win32_UI_Input_KeyboardAndMouse",
 	"Win32_UI_Shell",
 	"Win32_UI_Shell_PropertiesSystem",
+	"Win32_UI_Shell_Common",
 	"Win32_Devices_HumanInterfaceDevice",
 	"Win32_Devices_DeviceAndDriverInstallation",
 	"Win32_Security",
@@ -30,3 +31,4 @@ features = [
 
 [dependencies]
 windows-core = { version = "0.62.0" }
+regex = "1.13.1"

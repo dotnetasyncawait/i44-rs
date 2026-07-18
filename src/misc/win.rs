@@ -1,5 +1,6 @@
 use crate::common::error::{Error, Win32Error};
 use std::path::Path;
+use windows::Win32::{UI::WindowsAndMessaging::GetClassNameW, Foundation::HWND};
 use windows::core::PWSTR;
 use windows::Win32::{
 	System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW},
@@ -47,4 +48,10 @@ pub fn title() -> Result<String, Error> {
 	let copied = unsafe { GetWindowTextW(hwnd, &mut buff) } as usize ;
 	
 	Ok(String::from_utf16(&buff[..copied])?)
+}
+
+pub fn class_of(hwnd: HWND) -> String {
+	let mut buff = [0u16; 256];
+	let n = unsafe { GetClassNameW(hwnd, &mut buff) as usize };
+	String::from_utf16(&buff[..n]).expect("class name must be valid UTF-16")
 }

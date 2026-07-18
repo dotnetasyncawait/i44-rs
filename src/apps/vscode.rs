@@ -1,6 +1,17 @@
+use std::{process::Command, path::Path};
+use crate::common::error::Error;
 use crate::input::{mods::Mods, keys::Key, hotkey::{Hotkey, Hotkey::*}};
 
 pub const NAME: &'_ str = "Code";
+pub const FULL_PATH: &'_ str = concat!(env!("LOCALAPPDATA"), r"\Programs\Microsoft VS Code\Code.exe");
+
+pub fn open(path: impl AsRef<Path>) -> Result<(), Error> {
+	Command::new(&FULL_PATH)
+		.arg(path.as_ref())
+		.spawn()
+		.map(|_| ())
+		.map_err(|e| e.into())
+}
 
 // hotkeys
 

@@ -7,6 +7,7 @@ use std::sync::{mpsc::{self, SyncSender, TrySendError}, Arc, OnceLock, Mutex, Mu
 use std::fmt::{self, Debug, Formatter};
 use windows::core::Owned;
 use windows::Win32::{Foundation::{LPARAM, LRESULT, WPARAM}, System::Threading::GetCurrentThreadId};
+use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize};
 use windows::Win32::UI::{
 	Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VK_TO_VSC_EX, VK_BROWSER_BACK, VK_LAUNCH_APP2, INPUT, SendInput},
 	WindowsAndMessaging::{WH_KEYBOARD_LL, WH_MOUSE_LL, WM_QUIT, LLKHF_UP, LLKHF_EXTENDED, LLKHF_INJECTED, MSG,
@@ -609,22 +610,18 @@ impl Handler {
 		if key == entry.key {
 			let key_to_repeat = remap.key;
 			
-			if key_to_repeat.is_mouse_button() { // we don't repeat mouse buttons
-				return true;
-			}
-			
-			return if key == key_to_repeat {
+			return if key_to_repeat.is_mouse_button() { // we don't repeat mouse buttons
+				true
+			} else if key == key_to_repeat {
 				false
 			} else {
-				let input = if key_to_repeat.is_mouse_key() {
+				let input = if key_to_repeat.is_mouse_wheel() {
 					INPUT::mouse_down(key_to_repeat, CALL_NEXT_END)
 				} else {
 					INPUT::keybd_down(key_to_repeat, CALL_NEXT_END)
 				};
-				
 				h.send_count += 1;
 				h.sender.send(InputMsg::Single(input)).unwrap();
-				
 				true
 			};
 		}
@@ -633,7 +630,7 @@ impl Handler {
 			return true;
 		}
 		
-		if !Self::get_mod(remap.key).is_none() { // key-to-mod remap
+		if Self::get_mod(remap.key).is_any() { // key-to-mod remap
 			return false;
 		}
 		
@@ -900,6 +897,8 @@ impl Handler {
 		tx.send(thread_id).unwrap();
 		drop(tx);
 		
+		unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE).unwrap(); }
+		
 		let _keybd = unsafe { Owned::new(SetWindowsHookExW(WH_KEYBOARD_LL, Some(Self::ll_keybd_proc), None, 0).unwrap()) };
 		let _mouse = unsafe { Owned::new(SetWindowsHookExW(WH_MOUSE_LL, Some(Self::ll_mouse_proc), None, 0).unwrap()) };
 		
@@ -917,6 +916,7 @@ impl Handler {
 				}
 			}
 		}
+		unsafe { CoUninitialize(); }
 	}
 }
 

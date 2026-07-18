@@ -1,16 +1,16 @@
 mod misc;
 mod system;
 
-use i44::App;
+use i44::{App, apps::explorer};
 use misc::{hotkeys::AppExt, mode, kb::{I44, hid_msgs::HID_DEFAULT}, mic, sound};
 use windows::Win32::{
 	Foundation::{HWND, LPARAM, WPARAM},
-	System::Com::{COINIT_MULTITHREADED, CoInitializeEx},
+	System::Com::{COINIT_MULTITHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx},
 	UI::WindowsAndMessaging::{PBT_APMRESUMEAUTOMATIC, WM_POWERBROADCAST}};
 
 fn main() {
 	set_panic_hook();
-	unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).unwrap(); }
+	unsafe { CoInitializeEx(None, COINIT_MULTITHREADED | COINIT_DISABLE_OLE1DDE).unwrap(); }
 	
 	let app = App::new()
 		.add_hotkeys()
@@ -20,6 +20,7 @@ fn main() {
 	sound::init();
 	mode::init();
 	mic::init(&app);
+	explorer::init();
 	
 	I44::enable().expect("failed to connect to kb");
 	

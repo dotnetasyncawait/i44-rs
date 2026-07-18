@@ -1,5 +1,5 @@
 use i44::input::{hotkey::Hotkey::{self, *}, mods::Mods, keys::Key};
-use i44::common::error::Error;
+use i44::common::error::{Error, OK};
 use i44::misc::{win, helpers};
 use i44::apps::*;
 use i44::App;
@@ -85,7 +85,7 @@ impl AppExt for App {
 			.hotkey(Mods::LC,    Key::PG_UP, lc_pg_up)
 			.hotkey(Mods::LC,    Key::PG_DOWN, lc_pg_down)
 			.hotkey(Mods::NONE,  Key::INSERT, insert)
-			// .hotkey(Mods::LC,    Key::ENTER, lc_enter) // TODO: Paths, Clipboard
+			.hotkey(Mods::LC,    Key::ENTER, lc_enter)
 			.hotkey(Mods::LS,    Key::ENTER, ls_enter)
 			.hotkey(Mods::LC,    Key::SPACE, lc_space)
 			
@@ -555,7 +555,7 @@ fn lcs_up() -> HotkeyResult {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => { helpers::center_cursor()?; vscode::scroll_up_fast() },
 			tg::NAME => { helpers::center_cursor()?; tg::scroll_page_up() },
-			_ => Suppress
+			_ => Default
 		},
 		_ => Default
 	}.ok()
@@ -566,7 +566,7 @@ fn lcs_down() -> HotkeyResult {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => { helpers::center_cursor()?; vscode::scroll_down_fast() },
 			tg::NAME => { helpers::center_cursor()?; tg::scroll_page_down() },
-			_ => Suppress
+			_ => Default
 		},
 		_ => Default
 	}.ok()
@@ -710,6 +710,21 @@ fn insert() -> HotkeyResult {
 			vscode::NAME => vscode::new_file(),
 			_ => Suppress
 		}
+		_ => Default
+	}.ok()
+}
+
+fn lc_enter() -> HotkeyResult {
+	match Mode::get() {
+		ModeState::Normal => match win::name()?.as_str() {
+			explorer::NAME => Action(|_| {
+				for path in explorer::selected_items()?.iter().take(5) {
+					vscode::open(path)?;
+				}
+				OK
+			}),
+			_ => Default
+		},
 		_ => Default
 	}.ok()
 }

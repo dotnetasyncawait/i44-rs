@@ -63,7 +63,7 @@ fn get_paths() -> &'static Paths {
 
 fn icon_handler(_: &TrayIcon, event: IconEvent) -> Result<(), Error> {
 	match event {
-		IconEvent::LClick => get_mic().tgl_mute().map(|_| ()),
+		IconEvent::LClick => tgl_mute().map(|_| ()),
 		IconEvent::RClick => { Command::new("control").arg("mmsys.cpl,,1").spawn()?; OK },
 		IconEvent::DClick => OK,
 	}
