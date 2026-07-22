@@ -1,5 +1,5 @@
-use std::{fmt, path::Path, sync::{Mutex, MutexGuard, TryLockError, atomic::{AtomicU32, Ordering::Relaxed}}};
-use crate::common::error::{Error, Win32ErrExt, ErrResultExt};
+use std::{fmt, path::Path, sync::{Mutex, MutexGuard, TryLockError, atomic::{AtomicU32, Ordering}}};
+use crate::common::error::{Error, Win32ErrExt, ErrResultExt, Win32Error};
 use windows::core::{Owned, PCWSTR};
 use windows::Win32::{
 	Foundation::HWND,
@@ -8,7 +8,6 @@ use windows::Win32::{
 	UI::WindowsAndMessaging::{HICON, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, LoadImageW}};
 
 type EventHandler = fn(&TrayIcon, IconEvent) -> Result<(), Error>;
-type Win32Error = windows::core::Error;
 
 #[derive(PartialEq, Eq)]
 pub enum IconEvent {
@@ -29,7 +28,7 @@ impl TrayIcon {
 		let nid = NOTIFYICONDATAW {
 			cbSize: size_of::<NOTIFYICONDATAW>() as _,
 			hWnd: hwnd,
-			uID: NEXT_ID.fetch_add(1, Relaxed),
+			uID: NEXT_ID.fetch_add(1, Ordering::Relaxed),
 			uFlags: NIF_MESSAGE | NIF_STATE,
 			uCallbackMessage: msg,
 			dwState: NIS_HIDDEN,
@@ -37,8 +36,7 @@ impl TrayIcon {
 			..Default::default()
 		};
 		
-		let succeeded = unsafe { Shell_NotifyIconW(NIM_ADD, &nid).as_bool() };
-		assert!(succeeded, "Icon creation failed: {:?}", Win32Error::from_thread());
+		unsafe { Shell_NotifyIconW(NIM_ADD, &nid).expect("Icon creation failed"); }
 		
 		let inner = Mutex::new(Inner { nid, icons, index: usize::MAX, visible: false });
 		TrayIcon { inner, handler }
@@ -49,7 +47,7 @@ impl TrayIcon {
 	// 'hwnd', as an example, can be called each time on creating a context menu (might consider making
 	// a separate field).
 	
-	pub(super) fn id(&self) -> u32 { self.lock_inner().id() }
+	pub fn id(&self) -> u32 { self.lock_inner().id() }
 	pub fn hwnd(&self) -> HWND { self.lock_inner().hwnd() }
 	pub fn display(&self, index: usize) -> Result<(), Error> { self.lock_inner().display(index) }
 	pub fn show(&self) -> Result<(), Error> { self.lock_inner().show() }
@@ -60,8 +58,7 @@ impl TrayIcon {
 
 impl Drop for TrayIcon {
 	fn drop(&mut self) {
-		let deleted = unsafe { Shell_NotifyIconW(NIM_DELETE, &self.lock_inner().nid).as_bool() };
-		assert!(deleted, "Failed to delete icon: {:?}", Win32Error::from_thread())
+		unsafe { Shell_NotifyIconW(NIM_DELETE, &self.lock_inner().nid).expect("failed to delete icon"); }
 	}
 }
 
@@ -169,7 +166,7 @@ impl fmt::Debug for Inner {
 	}
 }
 
-unsafe impl Send for Inner {} // I'm scared here
+unsafe impl Send for Inner {}
 
 pub struct IconBuilder {
 	hwnd: HWND,
@@ -189,7 +186,7 @@ impl IconBuilder {
 		let path = path
 			.as_ref()
 			.to_str()
-			.ok_or(Error::Other(String::from("Invalid path")))?
+			.ok_or(Error::other("Invalid path"))?
 			.encode_utf16()
 			.chain(once(0))
 			.collect::<Vec<u16>>();

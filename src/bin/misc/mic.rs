@@ -1,6 +1,6 @@
 use std::{env, sync::{OnceLock, atomic::{AtomicBool, Ordering}}, process::Command, path::PathBuf};
-use i44::misc::{Icon, audio::{self, Device, DeviceType, VolumeNotfEvent}, tray_icon::{IconEvent, TrayIcon}};
-use i44::{App, common::error::{Error, OK}};
+use i44::misc::audio::{self, Device, DeviceType, VolumeNotfEvent};
+use i44::{common::error::{Error, OK}, tray_icon::{Icon, TrayIcon, IconEvent}};
 use super::sound;
 
 static MIC: OnceLock<Device> = OnceLock::new();
@@ -14,7 +14,7 @@ struct Paths {
 	mic_muted: PathBuf,
 }
 
-pub fn init(app: &App) {
+pub fn init() {
 	const NAME: &str = "Microphone (FIFINE K670 Microphone)";
 	
 	let mut mic = audio::default_device(DeviceType::Capture).expect("failed to get mic");
@@ -23,7 +23,7 @@ pub fn init(app: &App) {
 	let mut dir = env::current_dir().expect("failed to get current dir");
 	dir.push("media");
 	
-	let icon = app.icon_builder()
+	let icon = i44::icon_builder()
 		.add("FIFINE K670", dir.join("greenMic.ico")).expect("failed to add green icon")
 		.add("FIFINE K670 (muted)", dir.join("redMic.ico")).expect("failed to add red icon")
 		.handler(icon_handler)
@@ -33,7 +33,7 @@ pub fn init(app: &App) {
 	icon.display(muted as _).expect("failed to display icon");
 	
 	MUTED.store(muted, Ordering::Relaxed);
-	ICON.set(app.add_icon(icon)).expect("ICON should not be set");
+	ICON.set(i44::add_icon(icon)).expect("ICON should not be set");
 	
 	mic.on_volume_update(volume_handler).expect("failed to add volume handler");
 	MIC.set(mic).expect("MIC should not be set");

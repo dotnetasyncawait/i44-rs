@@ -10,11 +10,10 @@ use windows::Win32::{Foundation::{LPARAM, LRESULT, WPARAM}, System::Threading::G
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize};
 use windows::Win32::UI::{
 	Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VK_TO_VSC_EX, VK_BROWSER_BACK, VK_LAUNCH_APP2, INPUT, SendInput},
-	WindowsAndMessaging::{WH_KEYBOARD_LL, WH_MOUSE_LL, WM_QUIT, LLKHF_UP, LLKHF_EXTENDED, LLKHF_INJECTED, MSG,
-		LLMHF_INJECTED, MSLLHOOKSTRUCT, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE,
-		WM_MOUSEWHEEL, WM_MOUSEHWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP, XBUTTON1, XBUTTON2,
-		KBDLLHOOKSTRUCT, SetWindowsHookExW,GetMessageW, TranslateMessage, DispatchMessageW, CallNextHookEx,
-		PostThreadMessageW}};
+	WindowsAndMessaging::{WH_KEYBOARD_LL, WH_MOUSE_LL, LLKHF_UP, LLKHF_EXTENDED, LLKHF_INJECTED, MSG, LLMHF_INJECTED,
+		MSLLHOOKSTRUCT, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+		WM_MOUSEHWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP, XBUTTON1, XBUTTON2, KBDLLHOOKSTRUCT,
+		SetWindowsHookExW,GetMessageW, TranslateMessage, DispatchMessageW, CallNextHookEx}};
 
 #[derive(Debug)]
 pub struct Handler {
@@ -40,9 +39,6 @@ impl HotkeyHandler {
 	}
 }
 
-#[derive(Debug)]
-struct Worker(Option<JoinHandle<()>>, u32, i8);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct KeyMods { mods: Mods, key: Key }
 
@@ -65,44 +61,10 @@ enum InputMsg {
 }
 
 static HANDLER: OnceLock<Mutex<Handler>> = OnceLock::new();
-static WORKER: OnceLock<Mutex<Worker>> = OnceLock::new();
 static SUSPENDED: AtomicBool = AtomicBool::new(false);
 
 const PROCESS: LRESULT = LRESULT(0);
 const BLOCK: LRESULT = LRESULT(1);
-
-pub fn wait() -> i8 {
-	let Some(worker) = WORKER.get() else {
-		unreachable!("should not be called before initialization");
-	};
-	
-	let handle = worker.lock().unwrap().0.take();
-	if let Some(h) = handle {
-		h.join().unwrap();
-		
-		let mut h = HANDLER
-			.get().expect("handler should be set if worker is")
-			.lock().unwrap();
-	
-		let _ = std::mem::replace(&mut *h, Handler::new());
-		
-		worker.lock().unwrap().2 // ret_value
-	} else {
-		0
-	}
-}
-
-pub fn exit(ret_value: i8) {
-	if let Some(worker) = WORKER.get() {
-		let mut w = worker.lock().unwrap();
-		let thread_id = w.1;
-		if thread_id != 0 {
-			w.1 = 0;
-			w.2 = ret_value;
-			unsafe { PostThreadMessageW(thread_id, WM_QUIT, WPARAM(0), LPARAM(0)).unwrap() };
-		}
-	}
-}
 
 pub fn is_suspended() -> bool {
 	SUSPENDED.load(Ordering::Relaxed)
@@ -112,7 +74,7 @@ pub fn suspend(state: bool) {
 	SUSPENDED.store(state, Ordering::Relaxed);
 }
 
-pub fn suspend_togg() -> bool {
+pub fn suspend_tgl() -> bool {
 	!SUSPENDED.fetch_not(Ordering::Relaxed)
 }
 
@@ -147,7 +109,7 @@ impl Handler {
 		};
 	}
 	
-	pub fn start(mut self) {
+	pub fn start(mut self) -> (JoinHandle<()>, u32) {
 		let (tx, rx) = mpsc::channel::<InputMsg>();
 		let _ = thread::spawn(|| {
 			const INPUT_SIZE: i32 = size_of::<INPUT>() as _;
@@ -164,10 +126,10 @@ impl Handler {
 		HANDLER.set(Mutex::new(self)).expect("handler should not be set");
 		
 		let (tx, rx) = mpsc::channel::<u32>();
-		let handle = thread::spawn(|| Self::mq_handler(tx));
-		
+		let jh = thread::spawn(|| Self::mq_handler(tx));
 		let thread_id = rx.recv().unwrap();
-		WORKER.set(Mutex::new(Worker(Some(handle), thread_id, 0))).expect("worker should not be set");
+		
+		(jh, thread_id)
 	}
 	
 	fn lock_handler() -> MutexGuard<'static, Handler> {

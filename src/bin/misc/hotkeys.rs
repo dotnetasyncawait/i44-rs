@@ -812,17 +812,17 @@ fn f23() -> HotkeyResult {
 }
 
 fn suspend() -> HotkeyResult {
-	if App::suspend_togg() {
-		// Mode::set_none();
+	if i44::suspend_tgl() {
+		Mode::set_none();
 		I44::disable()?;
 	} else {
-		// Mode::set_default();
+		Mode::set_default();
 		I44::enable()?;
 	}
 	Ok(Suppress)
 }
 
 fn exit() -> HotkeyResult {
-	App::exit();
+	i44::exit();
 	Ok(Suppress)
 }

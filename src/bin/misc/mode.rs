@@ -29,6 +29,18 @@ impl Mode {
 			None => ModeState::None
 		}
 	}
+	
+	pub fn set_none() {
+		if let Some(mode) = MODE.get() {
+			mode.write().unwrap().state = ModeState::None;
+		}
+	}
+	
+	pub fn set_default() {
+		if let Some(mode) = MODE.get() {
+			mode.write().unwrap().state = ModeState::Normal;
+		}
+	}
 }
 
 pub fn init() {
