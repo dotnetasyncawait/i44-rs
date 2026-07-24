@@ -1,6 +1,6 @@
-pub const NAME: &str = "Obsidian";
-
 use crate::input::{mods::Mods, keys::Key, hotkey::{Hotkey, Hotkey::*}};
+
+pub const NAME: &str = "Obsidian";
 
 // hotkeys
 

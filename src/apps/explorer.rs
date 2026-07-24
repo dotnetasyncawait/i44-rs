@@ -13,7 +13,6 @@ use windows::Win32::{
 	System::{Variant::VARIANT, Com::{CLSCTX_ALL, CoCreateInstance}},
 };
 
-
 pub const NAME: &'_ str = "explorer";
 
 static WORKER: OnceLock<Sender<Job>> = OnceLock::new();
@@ -50,13 +49,9 @@ pub fn open(path: impl AsRef<Path>) -> Result<(), Error> {
 
 pub fn selected_items() -> Result<Vec<String>, Error> {
 	let hwnd = unsafe { GetForegroundWindow() };
-	if hwnd.is_invalid() {
-		return Err(Error::other("no foreground window"));
-	}
+	let class_name = win::class_of(hwnd)?;
 	
 	let regex = regex!("^(?:(Progman|WorkerW)|(?:Cabinet|Explore)WClass)$");
-	let class_name = win::class_of(hwnd);
-	
 	let Some(captures) = regex.captures(&class_name) else {
 		return Err(Error::other("not in explorer"))
 	};

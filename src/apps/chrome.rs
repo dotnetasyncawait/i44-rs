@@ -1,9 +1,9 @@
-pub const NAME: &'_ str = "chrome";
-
 use crate::input::{mods::Mods, keys::Key, hotkey::{Hotkey, Hotkey::*}};
 
-pub fn is_youtube(title: &str) -> bool {
-	title.len() >= 25 && title.ends_with("- YouTube - Google Chrome")
+pub const NAME: &'_ str = "chrome";
+
+pub fn is_youtube(title: impl AsRef<str>) -> bool {
+	title.as_ref().ends_with("- YouTube - Google Chrome")
 }
 
 // hotkeys
@@ -19,7 +19,7 @@ pub fn focus_on_addr_bar() -> Hotkey { Remap(Mods::LC, Key::L) }
 pub fn open_home_page() -> Hotkey { Remap(Mods::LA, Key::HOME) }
 pub fn jump_to_rightmost_tab() -> Hotkey { Remap(Mods::LC, Key::NUM9) }
 pub fn tabs() -> Hotkey { Remap(Mods::LCS, Key::A) }
-pub fn togg_loop_mode() -> Hotkey { Remap(Mods::LA, Key::L) }
+pub fn tgl_loop_mode() -> Hotkey { Remap(Mods::LA, Key::L) }
 pub fn increase_playb_speed() -> Hotkey { Remap(Mods::LA, Key::NUM4) }
 pub fn decrease_playb_speed() -> Hotkey { Remap(Mods::LA, Key::NUM5) }
 pub fn default_playb_speed() -> Hotkey { Remap(Mods::LA, Key::NUM6) }

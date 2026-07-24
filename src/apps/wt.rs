@@ -1,6 +1,6 @@
-pub const NAME: &'_ str = "WindowsTerminal";
-
 use crate::input::{mods::Mods, keys::Key, hotkey::{Hotkey, Hotkey::*}};
+
+pub const NAME: &'_ str = "WindowsTerminal";
 
 // hotkeys
 

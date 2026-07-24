@@ -214,8 +214,8 @@ fn l() -> HotkeyResult {
 	match Mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::show_or_focus_hover(),
-			chrome::NAME if chrome::is_youtube(win::title()?.as_str()) => chrome::togg_loop_mode(),
-			discord::NAME => discord::togg_member_list_or_vc_chat(),
+			chrome::NAME if chrome::is_youtube(win::title()?) => chrome::tgl_loop_mode(),
+			discord::NAME => discord::tgl_member_list_or_vc_chat(),
 			_ => Suppress
 		},
 		_ => Default

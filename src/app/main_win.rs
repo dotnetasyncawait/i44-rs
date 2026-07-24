@@ -2,14 +2,14 @@ use std::{cell::RefCell, ffi::c_void, sync::{Arc, Mutex, Weak, mpsc}};
 use std::{thread::{self, JoinHandle}, collections::{HashMap, hash_map::Entry}};
 use super::tray_icon::{TrayIcon, IconBuilder, IconEvent};
 use crate::{common::error::{Error, Win32Error}};
-use windows::{Win32::UI::WindowsAndMessaging::{WM_CLOSE, WM_DESTROY, WM_ENDSESSION}, core::w};
+use windows::core::w;
 use windows::Win32::{
 	Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
 	System::LibraryLoader::GetModuleHandleW,
 	UI::WindowsAndMessaging::{CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, MSG, RegisterClassW,
 		TranslateMessage, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP, CREATESTRUCTW, GWLP_USERDATA, GetWindowLongPtrW,
 		SetWindowLongPtrW, WM_NCCREATE, WM_USER, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_RBUTTONDOWN,
-		PostMessageW, PostQuitMessage}};
+		WM_CLOSE, WM_DESTROY, WM_ENDSESSION, PostMessageW, PostQuitMessage, DestroyWindow}};
 
 pub type OnMsgCallback = fn(HWND, u32, WPARAM, LPARAM) -> Option<isize>;
 pub type OnExitCallback = fn() -> bool;
@@ -96,8 +96,7 @@ impl MainWindow {
 	}
 	
 	pub fn exit(&self) {
-		// TODO: what if the window is already gone?
-		unsafe { PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)).unwrap(); }
+		_ = unsafe { PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) };
 	}
 }
 
@@ -120,7 +119,7 @@ fn win_mq(tx: mpsc::Sender<usize>, state: Arc<State>) {
 	let hwnd = unsafe { CreateWindowExW(
 		WS_EX_TOOLWINDOW,
 		class_name,
-		None,
+		w!("i44 main window"),
 		WS_POPUP,
 		0, 0, 0, 0,
 		None, None,
@@ -150,8 +149,8 @@ unsafe extern "system" fn win_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 	match msg {
 		WM_NCCREATE => {
 			let cs = unsafe { &*(lparam.0 as *const CREATESTRUCTW) };
-			unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize) };
-			return LRESULT(1);
+			unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize); }
+			return def_win_proc(hwnd, msg, wparam, lparam);
 		},
 		WM_ICON_MSG if lparam.0 as u32 == WM_MOUSEMOVE => return LRESULT(0),
 		_ => {}
@@ -173,14 +172,10 @@ unsafe extern "system" fn win_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 				}
 			}
 			drop(exit_cbs);
-			
 			_ = unsafe { Arc::from_raw(r_state) };
-			return def_win_proc(hwnd, msg, wparam, lparam);
+			unsafe { DestroyWindow(hwnd).unwrap() };
 		},
-		WM_DESTROY => {
-			unsafe { PostQuitMessage(0); }
-			return LRESULT(0);
-		},
+		WM_DESTROY => unsafe { PostQuitMessage(0); },
 		WM_ENDSESSION if wparam.0 == 1 => {
 			let exit_cbs = state.on_exit_cbs.lock().unwrap();
 			for f in exit_cbs.iter() {
@@ -188,8 +183,6 @@ unsafe extern "system" fn win_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 					break;
 				}
 			}
-			drop(exit_cbs);
-			return LRESULT(0);
 		},
 		WM_ICON_MSG => {
 			let event = match lparam.0 as u32 {
@@ -208,23 +201,22 @@ unsafe extern "system" fn win_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 			{
 				println!("From icon handler: {err:?}; (id: {icon_id})"); // TODO: display with window
 			}
-			
-			return LRESULT(0);
 		},
-		_ => {}
-	}
-	
-	let msg_cbs_map = state.on_msg_cbs.lock().unwrap();
-	if let Some(msg_cbs) = msg_cbs_map.get(&msg) {
-		for f in msg_cbs {
-			if let Some(res) = f(hwnd, msg, wparam, lparam) {
-				return LRESULT(res);
+		_ => {
+			let msg_cbs_map = state.on_msg_cbs.lock().unwrap();
+			if let Some(msg_cbs) = msg_cbs_map.get(&msg) {
+				for f in msg_cbs {
+					if let Some(res) = f(hwnd, msg, wparam, lparam) {
+						return LRESULT(res);
+					}
+				}
 			}
+			drop(msg_cbs_map);
+			return def_win_proc(hwnd, msg, wparam, lparam);
 		}
 	}
-	drop(msg_cbs_map);
 	
-	return def_win_proc(hwnd, msg, wparam, lparam);
+	return LRESULT(0);
 	
 	fn def_win_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
 		unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
