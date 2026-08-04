@@ -1,5 +1,6 @@
 pub(super) mod tray_icon;
 pub(super) mod main_win;
+pub mod clipboard;
 
 use super::common::error::{Error, ErrResultExt, OK};
 use super::input::{handler::{self, Handler}, hotkey::Hotkey, mods::Mods, keys::Key};
