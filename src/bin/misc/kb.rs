@@ -26,7 +26,7 @@ pub mod hid_msgs {
 	pub const HID_PING:         u8 = 0xFF;
 }
 
-static KB: LazyLock<I44> = LazyLock::new(|| {
+static DEV_INFO: LazyLock<Arc<DeviceInfo>> = LazyLock::new(|| {
 	let info = hid::enumerate()
 		.expect("hid enumeration should not fail")
 		.filter_map(|r| r.ok())
@@ -35,31 +35,25 @@ static KB: LazyLock<I44> = LazyLock::new(|| {
 		.nth(0)
 		.expect("i44 should be present");
 
-	I44 { info: Arc::new(info) }
+	Arc::new(info)
 });
 
-pub struct I44 {
-	info: Arc<DeviceInfo>,
+pub fn new_device() -> HidDevice {
+	HidDevice::new(Arc::clone(&DEV_INFO))
 }
 
-impl I44 {
-	pub fn new_device() -> HidDevice {
-		HidDevice::new(Arc::clone(&KB.info))
-	}
-	
-	pub fn enable() -> HidResult {
-		Self::new_device().write(&[HID_HOST, 1])
-	}
-	
-	pub fn disable() -> HidResult {
-		Self::new_device().write(&[HID_HOST, 0])
-	}
-	
-	pub fn set_mouse_layer() -> HidResult {
-		Self::set_layer(1 << MOUSE)
-	}
-	
-	pub fn set_layer(layer: u16) -> HidResult {
-		Self::new_device().write(&[HID_SET_LAYER, ((layer >> 8) & 0xFF) as u8, (layer & 0xFF) as u8])
-	}
+pub fn enable() -> HidResult {
+	new_device().write(&[HID_HOST, 1])
+}
+
+pub fn disable() -> HidResult {
+	new_device().write(&[HID_HOST, 0])
+}
+
+pub fn set_mouse_layer() -> HidResult {
+	set_layer(1 << MOUSE)
+}
+
+pub fn set_layer(layer: u16) -> HidResult {
+	new_device().write(&[HID_SET_LAYER, ((layer >> 8) & 0xFF) as u8, (layer & 0xFF) as u8])
 }

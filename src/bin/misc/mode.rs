@@ -1,5 +1,5 @@
 use std::{thread, sync::{OnceLock, RwLock}};
-use super::kb::{I44, layers::*, hid_msgs::*};
+use super::kb::{self, layers::*, hid_msgs::*};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ModeState {
@@ -52,7 +52,7 @@ pub fn init() {
 }
 
 fn hid_listener() {
-	let mut d = I44::new_device();
+	let mut d = kb::new_device();
 	
 	d.open().and_then(|_| d.write(&[HID_GET_LAYER])).unwrap();
 	let mut input = [0u8; 3];

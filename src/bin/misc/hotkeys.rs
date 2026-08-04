@@ -3,7 +3,7 @@ use i44::common::error::{Error, OK};
 use i44::misc::{win, helpers};
 use i44::apps::*;
 use i44::App;
-use super::{mode::{Mode, ModeState}, kb::I44, mic};
+use super::{mode::{Mode, ModeState}, kb, mic};
 use crate::system::paths;
 
 type HotkeyResult = Result<Hotkey, Error>;
@@ -744,7 +744,7 @@ fn lc_space() -> HotkeyResult {
 }
 
 fn ls_xbutton1() -> HotkeyResult {
-	I44::set_mouse_layer()?;
+	kb::set_mouse_layer()?;
 	Ok(Suppress)
 }
 
@@ -814,10 +814,10 @@ fn f23() -> HotkeyResult {
 fn suspend() -> HotkeyResult {
 	if i44::suspend_tgl() {
 		Mode::set_none();
-		I44::disable()?;
+		kb::disable()?;
 	} else {
 		Mode::set_default();
-		I44::enable()?;
+		kb::enable()?;
 	}
 	Ok(Suppress)
 }

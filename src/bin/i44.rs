@@ -2,7 +2,7 @@ mod misc;
 mod system;
 
 use i44::{apps::explorer};
-use misc::{hotkeys::AppExt, mode, kb::{I44, hid_msgs::HID_DEFAULT}, mic, sound};
+use misc::{hotkeys::AppExt, mode, kb::{self, hid_msgs::HID_DEFAULT}, mic, sound};
 use windows::Win32::{
 	Foundation::{HWND, LPARAM, WPARAM},
 	System::Com::{COINIT_MULTITHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx},
@@ -15,21 +15,21 @@ fn main() {
 	let app = i44::new()
 		.add_hotkeys()
 		.on_message(WM_POWERBROADCAST, default_kb)
-		.on_exit(|| { _ = I44::disable(); false });
+		.on_exit(|| { _ = kb::disable(); false });
 	
 	sound::init();
 	mode::init();
 	mic::init();
 	explorer::init();
 	
-	I44::enable().expect("failed to connect to kb");
+	kb::enable().expect("failed to connect to kb");
 	
 	app.run();
 }
 
 fn default_kb(_: HWND, _: u32, wparam: WPARAM, _: LPARAM) -> Option<isize> {
 	if wparam.0 as u32 == PBT_APMRESUMEAUTOMATIC {
-		let mut kb = I44::new_device();
+		let mut kb = kb::new_device();
 		kb.open()
 			.and_then(|_| kb.write(&[]))
 			.and_then(|_| kb.write(&[HID_DEFAULT]))
