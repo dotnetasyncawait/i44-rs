@@ -2,7 +2,7 @@ pub(super) mod tray_icon;
 pub(super) mod main_win;
 pub mod clipboard;
 
-use super::common::error::{Error, ErrResultExt, OK};
+use super::common::error::{Win32ErrResExt, Error, OK};
 use super::input::{handler::{self, Handler}, hotkey::Hotkey, mods::Mods, keys::Key};
 use tray_icon::{IconBuilder, TrayIcon, IconEvent};
 use main_win::{MainWindow, OnMsgCallback, OnExitCallback, Icon};
@@ -11,7 +11,8 @@ use windows::core::{Owned, w};
 use windows::Win32::{
 	Foundation::{HWND, POINT, LPARAM, WPARAM},
 	UI::WindowsAndMessaging::{AppendMenuW, CreatePopupMenu, TrackPopupMenuEx, GetCursorPos, MF_STRING, MF_CHECKED,
-		TPM_BOTTOMALIGN, TPM_RETURNCMD, PostThreadMessageW, SetForegroundWindow, WM_QUIT}};
+		TPM_BOTTOMALIGN, TPM_RETURNCMD, PostThreadMessageW, SetForegroundWindow, WM_QUIT},
+	System::Com::{COINIT_MULTITHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx}};
 
 static ICON: OnceLock<Icon> = OnceLock::new();
 static WIN: OnceLock<MainWindow> = OnceLock::new();
@@ -21,16 +22,20 @@ pub struct App {
 }
 
 pub fn new() -> App {
+	set_panic_hook();
+	unsafe { CoInitializeEx(None, COINIT_MULTITHREADED | COINIT_DISABLE_OLE1DDE).unwrap(); }
+	
 	let win = MainWindow::new();
 	
 	let mut dir = std::env::current_dir().unwrap();
 	dir.push("media");
 	
 	let icon = win.icon_builder()
-		.add("i44",             dir.join("default.ico")).expect("failed to add 'default' icon")
+		.add("i44", dir.join("default.ico")).expect("failed to add 'default' icon")
 		.add("i44 (suspended)", dir.join("suspended.ico")).expect("failed to add 'suspended' icon")
 		.handler(icon_handler)
-		.build();
+		.build()
+		.expect("failed to build an icon");
 	
 	icon.display(handler::is_suspended() as _).unwrap();
 	ICON.set(win.add_icon(icon)).expect("icon should not be set");
@@ -126,28 +131,40 @@ fn icon_handler(icon: &TrayIcon, event: IconEvent) -> Result<(), Error> {
 			return OK;
 		}
 		
-		let menu = Owned::new(CreatePopupMenu().with_context(|| "failed to create Popup menu")?);
+		let menu = Owned::new(CreatePopupMenu().context("failed to create Popup menu")?);
 		
 		let mut susp_flags = MF_STRING;
 		if handler::is_suspended() {
 			susp_flags |= MF_CHECKED;
 		}
 		
-		AppendMenuW(*menu, susp_flags, SUSPEND as _, w!("Suspend")).with_context(|| "failed to append 'Suspend' menu item")?;
-		AppendMenuW(*menu, MF_STRING, EXIT as _, w!("Exit")).with_context(|| "failed to append 'Exit' menu item")?;
+		AppendMenuW(*menu, susp_flags, SUSPEND as _, w!("Suspend")).context("failed to append 'Suspend' menu item")?;
+		AppendMenuW(*menu, MF_STRING, EXIT as _, w!("Exit")).context("failed to append 'Exit' menu item")?;
 		
 		let mut point = POINT::default();
-		GetCursorPos(&mut point).with_context(|| "failed to get cursor position")?;
+		GetCursorPos(&mut point).context("failed to get cursor position")?;
 		
 		TrackPopupMenuEx(*menu, (TPM_BOTTOMALIGN | TPM_RETURNCMD).0, point.x, point.y, icon.hwnd(), None)
 	};
 	
 	match res.0 {
 		0 => {}, // cancelled
-		SUSPEND => return icon.display(handler::suspend_tgl() as _),
+		SUSPEND => return Ok(icon.display(handler::suspend_tgl() as _)?),
 		EXIT => self::exit(),
 		_ => unreachable!()
 	};
 	
 	OK
+}
+
+fn set_panic_hook() {
+	std::panic::set_hook(Box::new(|info| {
+		let loc = info.location().unwrap();
+		
+		let _text = format!(
+			"panic at {}:{}:{}: '{}'",
+			loc.file(), loc.line(), loc.column(), info.payload_as_str().unwrap_or_default());
+		
+		std::process::exit(0);
+	}));
 }

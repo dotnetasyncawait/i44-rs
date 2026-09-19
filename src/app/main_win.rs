@@ -1,7 +1,7 @@
 use std::{cell::RefCell, ffi::c_void, sync::{Arc, Mutex, Weak, mpsc}};
 use std::{thread::{self, JoinHandle}, collections::{HashMap, hash_map::Entry}};
 use super::tray_icon::{TrayIcon, IconBuilder, IconEvent};
-use crate::{common::error::{Error, Win32Error}};
+use crate::common::error::OsError;
 use windows::core::w;
 use windows::Win32::{
 	Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
@@ -113,7 +113,7 @@ fn win_mq(tx: mpsc::Sender<usize>, state: Arc<State>) {
 	wc.lpszClassName = class_name;
 	
 	if unsafe { RegisterClassW(&wc) } == 0 {
-		panic!("failed to register class: {}", Win32Error::from_thread().message());
+		panic!("failed to register class: {}", windows_core::Error::from_thread());
 	}
 	
 	let hwnd = unsafe { CreateWindowExW(
@@ -231,40 +231,36 @@ pub struct Icon {
 }
 
 impl Icon {
-	pub fn display(&self, index: usize) -> Result<(), Error> {
+	pub fn display(&self, index: usize) -> Result<(), OsError> {
 		if let Some(icon) = self.inner.upgrade() {
 			icon.display(index)
 		} else {
-			Self::dropped_err()
+			todo!()
 		}
 	}
 	
-	pub fn show(&self) -> Result<(), Error> {
+	pub fn show(&self) -> Result<(), OsError> {
 		if let Some(icon) = self.inner.upgrade() {
 			icon.show()
 		} else {
-			Self::dropped_err()
+			todo!()
 		}
 	}
 	
-	pub fn hide(&self) -> Result<(), Error> {
+	pub fn hide(&self) -> Result<(), OsError> {
 		if let Some(icon) = self.inner.upgrade() {
 			icon.hide()
 		} else {
-			Self::dropped_err()
+			todo!()
 		}
 	}
 	
-	pub fn toggle_visibility(&self) -> Result<bool, Error> {
+	pub fn toggle_visibility(&self) -> Result<bool, OsError> {
 		if let Some(icon) = self.inner.upgrade() {
 			icon.toggle_visibility()
 		} else {
-			Self::dropped_err()
+			todo!()
 		}
-	}
-	
-	fn dropped_err<T>() -> Result<T, Error> {
-		Err(Error::Other(String::from("Icon outlived App")))
 	}
 }
 

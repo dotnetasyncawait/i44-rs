@@ -32,5 +32,11 @@ features = [
 ]
 
 [dependencies]
-windows-core = { version = "0.62.0" }
+windows-core = "0.62.0"
 regex = "1.13.1"
+
+[profile.release]
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

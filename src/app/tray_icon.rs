@@ -1,5 +1,6 @@
-use std::{fmt, path::Path, sync::{Mutex, MutexGuard, TryLockError, atomic::{AtomicU32, Ordering}}};
-use crate::common::error::{Error, Win32ErrExt, ErrResultExt, Win32Error};
+use std::{fmt, os::windows::ffi::OsStrExt, path::Path};
+use std::sync::{Mutex, MutexGuard, TryLockError, atomic::{AtomicU32, Ordering}};
+use crate::common::error::{OsError, Win32ErrResExt, Error};
 use windows::core::{Owned, PCWSTR};
 use windows::Win32::{
 	Foundation::HWND,
@@ -22,7 +23,7 @@ pub struct TrayIcon {
 }
 
 impl TrayIcon {
-	fn new(hwnd: HWND, msg: u32, icons: Vec<Item>, handler: Option<EventHandler>) -> Self {
+	fn new(hwnd: HWND, msg: u32, icons: Vec<Item>, handler: Option<EventHandler>) -> Result<Self, OsError> {
 		static NEXT_ID: AtomicU32 = AtomicU32::new(0);
 		
 		let nid = NOTIFYICONDATAW {
@@ -36,10 +37,10 @@ impl TrayIcon {
 			..Default::default()
 		};
 		
-		unsafe { Shell_NotifyIconW(NIM_ADD, &nid).expect("Icon creation failed"); }
+		unsafe { Shell_NotifyIconW(NIM_ADD, &nid).ok().context("failed to create icon")?; }
 		
 		let inner = Mutex::new(Inner { nid, icons, index: usize::MAX, visible: false });
-		TrayIcon { inner, handler }
+		Ok(TrayIcon { inner, handler })
 	}
 	
 	// Note: 'id' and 'hwnd' are read-only fields, and they don't really need a lock. 'id' is read
@@ -49,10 +50,10 @@ impl TrayIcon {
 	
 	pub fn id(&self) -> u32 { self.lock_inner().id() }
 	pub fn hwnd(&self) -> HWND { self.lock_inner().hwnd() }
-	pub fn display(&self, index: usize) -> Result<(), Error> { self.lock_inner().display(index) }
-	pub fn show(&self) -> Result<(), Error> { self.lock_inner().show() }
-	pub fn hide(&self) -> Result<(), Error> { self.lock_inner().hide() }
-	pub fn toggle_visibility(&self) -> Result<bool, Error> { self.lock_inner().toggle_visibility() }
+	pub fn display(&self, index: usize) -> Result<(), OsError> { self.lock_inner().display(index) }
+	pub fn show(&self) -> Result<(), OsError> { self.lock_inner().show() }
+	pub fn hide(&self) -> Result<(), OsError> { self.lock_inner().hide() }
+	pub fn toggle_visibility(&self) -> Result<bool, OsError> { self.lock_inner().toggle_visibility() }
 	fn lock_inner(&self) -> MutexGuard<'_, Inner> { self.inner.lock().unwrap() }
 }
 
@@ -94,8 +95,8 @@ impl Inner {
 	fn id(&self) -> u32 { self.nid.uID }
 	fn hwnd(&self) -> HWND { self.nid.hWnd }
 	
-	fn display(&mut self, index: usize) -> Result<(), Error> {
-		assert!(index < self.icons.len(), "Invalid icon index");
+	fn display(&mut self, index: usize) -> Result<(), OsError> {
+		assert!(index < self.icons.len(), "invalid icon index");
 		
 		if index == self.index {
 			return self.show();
@@ -110,27 +111,27 @@ impl Inner {
 		Ok(())
 	}
 	
-	fn show(&mut self) -> Result<(), Error> {
+	fn show(&mut self) -> Result<(), OsError> {
 		if !self.visible {
 			self.toggle_visibility()?;
 		}
 		Ok(())
 	}
 	
-	fn hide(&mut self) -> Result<(), Error> {
+	fn hide(&mut self) -> Result<(), OsError> {
 		if self.visible {
 			self.toggle_visibility()?;
 		}
 		Ok(())
 	}
 	
-	fn toggle_visibility(&mut self) -> Result<bool, Error> {
+	fn toggle_visibility(&mut self) -> Result<bool, OsError> {
 		self.notify(0, NIF_STATE, self.visible)?; // Index is ignored for NIF_STATE
 		self.visible ^= true;
 		Ok(self.visible)
 	}
 	
-	fn notify(&mut self, index: usize, flags: NOTIFY_ICON_DATA_FLAGS, hide: bool) -> Result<(), Error> {
+	fn notify(&mut self, index: usize, flags: NOTIFY_ICON_DATA_FLAGS, hide: bool) -> Result<(), OsError> {
 		if flags.contains(NIF_ICON) {
 			self.nid.hIcon = *self.icons[index].h_icon;
 		}
@@ -147,11 +148,9 @@ impl Inner {
 		
 		self.nid.uFlags = flags;
 		
-		if unsafe { Shell_NotifyIconW(NIM_MODIFY, &self.nid).as_bool() } {
-			Ok(())
-		} else {
-			Err(Error::Win32(Win32Error::from_thread().with_context("Failed to update icon")))
-		}
+		unsafe { Shell_NotifyIconW(NIM_MODIFY, &self.nid) }
+			.ok()
+			.context("failed to notify icon")
 	}
 }
 
@@ -180,20 +179,22 @@ impl IconBuilder {
 		Self { hwnd, msg, icons: Vec::new(), handler: None }
 	}
 	
-	pub fn add<P: AsRef<Path>>(mut self, tip: &'_ str, path: P) -> Result<Self, Error> {
+	pub fn add<P: AsRef<Path>>(mut self, tip: &'_ str, path: P) -> Result<Self, OsError> {
 		use std::iter::once;
 		
 		let path = path
 			.as_ref()
-			.to_str()
-			.ok_or(Error::other("Invalid path"))?
-			.encode_utf16()
+			.as_os_str()
+			.encode_wide()
 			.chain(once(0))
 			.collect::<Vec<u16>>();
 		
-		let handle = unsafe {
-			LoadImageW(None, PCWSTR(path.as_ptr()), IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE)
-				.with_context(|| String::from("Failed to load icon"))?
+		let handle = unsafe { LoadImageW(
+			None,
+			PCWSTR(path.as_ptr()),
+			IMAGE_ICON,
+			0, 0,
+			LR_LOADFROMFILE | LR_DEFAULTSIZE).context("failed to load icon image")?
 		};
 		
 		let h_icon = unsafe { Owned::new(HICON(handle.0)) };
@@ -212,7 +213,7 @@ impl IconBuilder {
 		self
 	}
 	
-	pub fn build(self) -> TrayIcon {
+	pub fn build(self) -> Result<TrayIcon, OsError> {
 		TrayIcon::new(self.hwnd, self.msg, self.icons, self.handler)
 	}
 }

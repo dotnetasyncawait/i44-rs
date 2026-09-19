@@ -46,6 +46,12 @@ impl KeyMods {
 	fn new(mods: Mods, key: Key) -> Self { Self { mods, key } }
 }
 
+impl fmt::Display for KeyMods {
+	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+		write!(f, "{:?} & {:?}", self.mods, self.key)
+	}
+}
+
 enum CurrHotkey {
 	Default(KeyMods),
 	Remap(KeyMods, KeyMods),
@@ -199,7 +205,7 @@ impl Handler {
 		// For example, decrementing `send_count` on `CALL_NEXT_END` before calling the next hook is a violation,
 		// because the interrupting keys will be sent before we complete our sequence (QMK shifted-symbols case).
 		
-		let s = unsafe { ptr::read(lparam.0 as *const KBDLLHOOKSTRUCT) };
+		let s = unsafe { *(lparam.0 as *const KBDLLHOOKSTRUCT) };
 		
 		match s.dwExtraInfo {
 			CALL_NEXT => return PROCESS,
@@ -824,9 +830,9 @@ impl Handler {
 				Hotkey::Unicode(str) => Self::kb_unicode(entry, str, h),
 				Hotkey::Action(action) => Self::kb_action(entry, action, h),
 				Hotkey::ActionRepeat(action) => Self::kb_action_r(entry, action, h),
-			},
-			Err(err) => {
-				println!("{err:?} ({entry:?})"); // TODO: display the error with a window
+			}
+			Err(err) => {  
+				println!("from hotkey: {err:?}\n  Entry: {entry}"); // TODO: display the error in a window
 				true
 			}
 		}

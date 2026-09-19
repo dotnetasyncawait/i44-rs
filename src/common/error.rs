@@ -1,76 +1,99 @@
-use std::{fmt::Display, str::Utf8Error, string::FromUtf16Error};
-use crate::hid::HidError;
-
-pub type Win32Error = windows::core::Error;
-pub type IOError = std::io::Error;
+use std::{borrow::Cow, error::Error as StdError, fmt};
+use windows_core::{Error as Win32Error, HRESULT};
+use windows::Win32::Foundation::WIN32_ERROR;
 
 pub const OK: Result<(), Error> = Ok(());
 
 #[derive(Debug)]
-pub enum Error {
-	Win32(Win32Error),
-	Hid(HidError),
-	IO(IOError),
-	Other(String)
+pub struct Error {
+	inner: Box<dyn StdError + 'static>,
 }
 
-impl Error {
-	pub fn other(str: impl Into<String>) -> Self {
-		Self::Other(str.into())
+impl<E: StdError + 'static> From<E> for Error {
+	fn from(value: E) -> Self {
+		Self { inner: Box::new(value) }
 	}
 }
 
-impl From<Win32Error> for Error {
-	fn from(value: Win32Error) -> Self {
-		Self::Win32(value)
+impl fmt::Display for Error {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		self.inner.fmt(f)
 	}
 }
 
-impl From<FromUtf16Error> for Error {
-	fn from(value: FromUtf16Error) -> Self {
-		Self::Other(value.to_string())
+#[derive(Debug)]
+pub struct OsError {
+	inner: Box<Inner>
+}
+
+#[derive(Debug)]
+struct Inner {
+	ctx: Cow<'static, str>,
+	err: Win32Error,
+}
+
+impl OsError {
+	pub fn from_hr(ctx: impl Into<Cow<'static, str>>, hr: HRESULT) -> Self {
+		Self::from_err(ctx, Win32Error::from_hresult(hr))
 	}
-}
-
-impl From<Utf8Error> for Error {
-	fn from(value: Utf8Error) -> Self {
-		Self::Other(value.to_string())
+	
+	pub fn from_win32(ctx: impl Into<Cow<'static, str>>, code: WIN32_ERROR) -> Self {
+		Self::from_err(ctx, Win32Error::from(code))
 	}
-}
-
-impl From<HidError> for Error {
-	fn from(value: HidError) -> Self {
-		Self::Hid(value)
+	
+	pub fn from_thread(ctx: impl Into<Cow<'static, str>>) -> Self {
+		Self::from_err(ctx, Win32Error::from_thread())
 	}
-}
-
-impl From<IOError> for Error {
-	fn from(value: IOError) -> Self {
-		Self::IO(value)
+	
+	pub fn from_err(ctx: impl Into<Cow<'static, str>>, err: Win32Error) -> Self {
+		Self { inner: Box::new(Inner { ctx: ctx.into(), err }) }
 	}
+	
+	pub fn code(&self) -> HRESULT { self.inner.err.code() }
 }
 
-pub trait ErrResultExt<F: FnOnce() -> S, S> {
-	fn with_context(self, ctx: F) -> Self;
-}
+impl StdError for OsError {}
 
-impl<T, F, S> ErrResultExt<F, S> for Result<T, Win32Error>
-	where F: FnOnce() -> S, S: Display
-{
-	fn with_context(self, ctx: F) -> Self {
-		match self {
-			Ok(ok) => Ok(ok),
-			Err(err) => Err(Win32Error::new(err.code(), format!("{}: {}", ctx(), err.message())))
+impl fmt::Display for OsError {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		if self.inner.ctx.is_empty() {
+			self.inner.err.fmt(f)
+		} else {
+			write!(f, "{}: {}", self.inner.ctx, self.inner.err)
 		}
 	}
 }
 
-pub trait Win32ErrExt<E> {
-	fn with_context(self, ctx: E) -> Self;
+impl From<Win32Error> for OsError {
+	fn from(value: Win32Error) -> Self {
+		Self::from_err("", value)
+	}
 }
 
-impl<E: Display> Win32ErrExt<E> for Win32Error {
-	fn with_context(self, ctx: E) -> Self {
-		Win32Error::new(self.code(), format!("{}: {}", ctx, self.message()))
+pub(crate) trait Win32ErrResExt {
+	type OK;
+	fn context(self, ctx: impl Into<Cow<'static, str>>) -> Result<Self::OK, OsError>;
+	fn with_context<R: Into<Cow<'static, str>>>(self, ctx: impl FnOnce() -> R) -> Result<Self::OK, OsError>;
+}
+
+impl<T> Win32ErrResExt for Result<T, Win32Error> {
+	type OK = T;
+	
+	fn context(self, ctx: impl Into<Cow<'static, str>>) -> Result<T, OsError> {
+		self.map_err(|err| OsError::from_err(ctx, err))
+	}
+	
+	fn with_context<C: Into<Cow<'static, str>>>(self, ctx: impl FnOnce() -> C) -> Result<T, OsError> {
+		self.map_err(|err| OsError::from_err(ctx(), err))
+	}
+}
+
+pub(crate) trait Win32ErrExt {
+	fn as_win32(&self) -> WIN32_ERROR;
+}
+
+impl Win32ErrExt for Win32Error {
+	fn as_win32(&self) -> WIN32_ERROR {
+		WIN32_ERROR(self.code().0 as u32 & 0xFFFF)
 	}
 }
