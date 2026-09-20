@@ -1,9 +1,10 @@
-use std::{fmt::{self, Debug}, slice, sync::Arc, time::Duration};
-use super::{HidError, error::Win32ErrorExt};
-use windows::core::{Error, HRESULT, Owned, PCWSTR};
+use std::{fmt, slice, sync::Arc, time::Duration};
+use crate::{common::error::{Win32ErrExt, Win32ErrResExt}, misc::native::NonNullHANDLE};
+use super::error::{Error, ErrorKind};
+use windows_core::{Owned, PCWSTR};
 use windows::Win32::{
-	Foundation::{HANDLE, ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING,
-		ERROR_NOT_FOUND, ERROR_SHARING_VIOLATION, GENERIC_READ, GENERIC_WRITE, WAIT_TIMEOUT},
+	Foundation::{ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING,
+		ERROR_NOT_FOUND, ERROR_SHARING_VIOLATION, GENERIC_READ, GENERIC_WRITE, WAIT_TIMEOUT, WIN32_ERROR},
 	Storage::FileSystem::{CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 		ReadFile, WriteFile},
 	System::IO::{CancelIoEx, GetOverlappedResult, GetOverlappedResultEx, OVERLAPPED},
@@ -15,168 +16,148 @@ pub enum DeviceAccess {
 	ReadWrite
 }
 
-pub struct HidDevice {
+pub struct Device {
 	info: Arc<DeviceInfo>,
-	handle: Option<Owned<HANDLE>>,
-	event: Option<Owned<HANDLE>>,
-	input: Vec<u8>,
-	output: Vec<u8>,
+	handle: Option<Owned<NonNullHANDLE>>,
+	event: Option<Owned<NonNullHANDLE>>,
+	input: Box<[u8]>,
+	output: Box<[u8]>,
 }
 
-impl HidDevice {
+impl Device {
 	pub fn new(info: Arc<DeviceInfo>) -> Self {
-		let input_len = info.input_report_byte_len;
-		let output_len = info.output_report_byte_len;
+		let input = unsafe { Box::<[u8]>::new_zeroed_slice(info.input_report_byte_len as _).assume_init() };
+		let output = unsafe { Box::<[u8]>::new_zeroed_slice(info.output_report_byte_len as _).assume_init() };
 		
-		Self {
-			info,
-			handle: None,
-			event: None,
-			input: vec![0u8; input_len as _],
-			output: vec![0u8; output_len as _],
-		}
+		Self { info, handle: None, event: None, input, output }
 	}
 	
 	pub fn info(&self) -> &DeviceInfo {
 		&self.info
 	}
 	
-	pub fn open(&mut self) -> Result<(), HidError> {
+	pub fn open(&mut self) -> Result<(), Error> {
 		self.open_with(DeviceAccess::ReadWrite)
 	}
 	
-	pub fn open_with(&mut self, access: DeviceAccess) -> Result<(), HidError> {
-		if let Some(_) = self.handle {
-			return Ok(()); // TODO: return an error?
+	pub fn open_with(&mut self, access: DeviceAccess) -> Result<(), Error> {
+		if self.handle.is_some() {
+			Ok(()) // TODO: return an error?
+		} else {
+			self.open_unchecked_with(access)
 		}
-		
+	}
+	
+	fn open_unchecked_with(&mut self, access: DeviceAccess) -> Result<(), Error> {
 		let access = match access {
 			DeviceAccess::Read => GENERIC_READ,
 			DeviceAccess::Write => GENERIC_WRITE,
 			DeviceAccess::ReadWrite => GENERIC_READ | GENERIC_WRITE,
 		};
 		
-		let res: Result<HANDLE, Error> = unsafe { 
+		let res = unsafe {
 			CreateFileW(
 				PCWSTR(self.info.path.as_ptr()),
 				access.0,
-				FILE_SHARE_READ | FILE_SHARE_WRITE,
-				None,
-				OPEN_EXISTING,
-				FILE_FLAG_OVERLAPPED,
-				None) };
+				FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, None) };
 		
 		let handle = match res {
-			Ok(h) => unsafe { Owned::new(h) },
-			Err(err) => {
-				const FILE_NOT_FOUND: HRESULT = HRESULT::from_win32(ERROR_FILE_NOT_FOUND.0);
-				const SHARING_VIOLATION: HRESULT = HRESULT::from_win32(ERROR_SHARING_VIOLATION.0);
-				
-				return Err(match err.code() {
-					FILE_NOT_FOUND => HidError::DeviceNotConnected,
-					SHARING_VIOLATION => HidError::DeviceInUse,
-					_ => err.into()
-				});
-			}
+			Ok(h) => unsafe { Owned::new(NonNullHANDLE::from_valid(h)) },
+			Err(err) => return Err(match err.as_win32() {
+				ERROR_FILE_NOT_FOUND => Error::new_simple(ErrorKind::DeviceNotConnected),
+				ERROR_SHARING_VIOLATION => Error::new_simple(ErrorKind::DeviceInUse),
+				_ => Error::new_os("failed to open device", err)
+			})
 		};
 		
 		if self.event.is_none() {
 			let event = unsafe {
-				Owned::new(CreateEventW(None, true, false, PCWSTR::null())
-					.map_err(|err| err.with_context("Failed to create an event"))?) };
-			
-			self.event = Some(event);
+				CreateEventW(None, true, false, PCWSTR::null()).context("failed to create an event")?
+			};
+			self.event = Some(unsafe { Owned::new(NonNullHANDLE::from_valid(event)) });
 		}
 		
 		self.handle = Some(handle);
 		Ok(())
 	}
 	
-	pub fn write(&mut self, output: &[u8]) -> Result<(), HidError> {
-		let (h, must_close) = match &self.handle {
-			Some(owned) => (**owned, false),
-			None => {
-				self.open_with(DeviceAccess::Write)?;
-				(**self.handle.as_ref().unwrap(), true)
-			}
+	pub fn write(&mut self, output: &[u8]) -> Result<(), Error> {
+		let mut must_close = if self.handle.is_some() {
+			false
+		} else {
+			self.open_unchecked_with(DeviceAccess::Write)?;
+			true
 		};
 		
-		let event = *self.event.as_deref().unwrap();
-		let buffer = &mut self.output;
+		let buf: &mut [u8] = &mut self.output;
+		let copy_len = Ord::min(output.len(), buf.len() - 1);
+		buf[1..copy_len+1].copy_from_slice(&output[..copy_len]);
 		
-		let copy_len = Ord::min(output.len(), buffer.len() - 1);
-		buffer[1..copy_len+1].copy_from_slice(&output[..copy_len]);
-		
-		let ret = Self::write_inner(h, event, &buffer);
+		let ret = self.write_inner(&mut must_close);
 		if must_close {
 			self.close();
 		}
 		ret
 	}
 	
-	fn write_inner(h: HANDLE, event: HANDLE, output: &[u8]) -> Result<(), HidError> {
-		let mut ol = OVERLAPPED::default();
-		ol.hEvent = event;
+	fn write_inner(&self, must_close: &mut bool) -> Result<(), Error> {
+		let h = self.handle.as_ref().unwrap().as_handle();
 		
-		let Err(err) = (unsafe { WriteFile(h, Some(output), None, Some(&mut ol)) }) else {
+		let mut ol = OVERLAPPED::default();
+		ol.hEvent = self.event.as_ref().unwrap().as_handle();
+		
+		let Err(err) = (unsafe { WriteFile(h, Some(&self.output), None, Some(&mut ol)) }) else {
 			// completed synchronously
 			return Ok(());
 		};
 		
-		if err.code() != HRESULT::from_win32(ERROR_IO_PENDING.0) {
-			return Err(Self::get_write_error(err));
+		if err.as_win32() == ERROR_IO_PENDING {
+			let mut bt = 0u32;
+			unsafe { GetOverlappedResult(h, &ol, &mut bt, true) }
+				.map_err(|err| Self::get_write_error(err, "failed to get overlapped write-result", must_close))
+		} else {
+			Err(Self::get_write_error(err, "failed to write file", must_close))
 		}
-		
-		let mut bt = 0u32;
-		if let Err(err) = unsafe { GetOverlappedResult(h, &ol, &mut bt, true) } {
-			return Err(Self::get_write_error(err));
-		}
-		
-		Ok(())
 	}
 	
-	pub fn read(&mut self, input: &mut [u8]) -> Result<(), HidError> {
+	pub fn read(&mut self, input: &mut [u8]) -> Result<(), Error> {
 		self.read_timeout(input, Duration::MAX)
 	}
 	
-	pub fn read_timeout(&mut self, input: &mut [u8], timeout: Duration) -> Result<(), HidError> {
-		let (h, must_close) = match &self.handle {
-			Some(owned) => (**owned, false),
-			None => {
-				self.open_with(DeviceAccess::Read)?;
-				(**self.handle.as_ref().unwrap(), true)
-			}
+	pub fn read_timeout(&mut self, input: &mut [u8], timeout: Duration) -> Result<(), Error> {
+		let mut must_close = if self.handle.is_some() {
+			false
+		} else {
+			self.open_unchecked_with(DeviceAccess::Read)?;
+			true
 		};
 		
-		let event = *self.event.as_deref().unwrap();
-		let buff = &mut self.input;
-		let timeout = timeout.as_millis().min(INFINITE as u128) as u32;
-		
-		let ret = Self::read_inner(h, event, buff, timeout);
+		let res = self.read_inner(timeout.as_millis().min(INFINITE as u128) as u32, &mut must_close);
 		if must_close {
 			self.close();
 		}
-		ret?;
+		res?;
 		
-		let buffer = &self.input;
-		
-		let copy_len = Ord::min(input.len(), buffer.len() - 1);
-		input[..copy_len].copy_from_slice(&buffer[1..copy_len+1]);
+		let buf: &[u8] = &self.input;
+		let copy_len = Ord::min(input.len(), buf.len() - 1);
+		input[..copy_len].copy_from_slice(&buf[1..copy_len+1]);
 		
 		Ok(())
 	}
 	
-	fn read_inner(h: HANDLE, event: HANDLE, buffer: &mut [u8], timeout: u32) -> Result<(), HidError> {
-		let mut ol = OVERLAPPED::default();
-		ol.hEvent = event;
+	fn read_inner(&mut self, timeout: u32, must_close: &mut bool) -> Result<(), Error> {
+		let h = self.handle.as_ref().unwrap().as_handle();
 		
-		let Err(err) = (unsafe { ReadFile(h, Some(buffer), None, Some(&mut ol)) }) else {
+		let mut ol = OVERLAPPED::default();
+		ol.hEvent = self.event.as_ref().unwrap().as_handle();
+		
+		let Err(err) = (unsafe { ReadFile(h, Some(&mut self.input), None, Some(&mut ol)) }) else {
 			// completed synchronously
 			return Ok(());
 		};
 		
-		if err.code() != HRESULT::from_win32(ERROR_IO_PENDING.0) {
-			return Err(Self::get_read_error(err));
+		if err.as_win32() != ERROR_IO_PENDING {
+			return Err(Self::get_read_error(err, "failed to read file", must_close));
 		}
 		
 		let mut bt = 0u32;
@@ -184,69 +165,52 @@ impl HidDevice {
 			return Ok(());
 		};
 		
-		const TIMEOUT: HRESULT = HRESULT::from_win32(WAIT_TIMEOUT.0);
-		const IO_INCOMPLETE: HRESULT = HRESULT::from_win32(ERROR_IO_INCOMPLETE.0);
+		const ERROR_WAIT_TIMEOUT: WIN32_ERROR = WIN32_ERROR(WAIT_TIMEOUT.0);
 		
-		if !matches!(err.code(), TIMEOUT | IO_INCOMPLETE) {
-			return Err(Self::get_read_error(err));
+		if !matches!(err.as_win32(), ERROR_WAIT_TIMEOUT | ERROR_IO_INCOMPLETE) {
+			return Err(Self::get_read_error(err, "failed to get overlapped read-result", must_close));
 		}
 		
 		// timed out or 'timeout' was 0 and the operation is still in progress
 		
 		let Err(err) = (unsafe { CancelIoEx(h, Some(&ol)) }) else {
-			return Err(HidError::Timeout);
+			return Err(Error::new_simple(ErrorKind::TimedOut));
 		};
 		
-		const NOT_FOUND: HRESULT = HRESULT::from_win32(ERROR_NOT_FOUND.0);
-		
-		match err.code() {
-			NOT_FOUND => {
+		match err.as_win32() {
+			ERROR_NOT_FOUND => {
 				// The IO operation had already been finished by the time we tried to cancel it.
 				// Let's make another try to get the result.
-				match unsafe { GetOverlappedResult(h, &ol, &mut bt, true) } {
-					Ok(_) => Ok(()),
-					Err(err) => Err(Self::get_read_error(err))
-				}
+				unsafe { GetOverlappedResult(h, &ol, &mut bt, true)
+					.map_err(|err|
+						Self::get_read_error(err, "failed to repeatedly get overlapped read-result", must_close)) }
 			},
-			_ => Err(err.with_context("Failed to cancel read IO").into())
+			_ => Err(Error::new_os("failed to cancel read IO", err))
 		}
 	}
 	
 	pub fn close(&mut self) {
-		let _ = self.handle.take();
+		_ = self.handle.take();
 	}
 	
-	fn get_write_error(err: Error) -> HidError {
-		const DEVICE_NOT_CONNECTED: HRESULT = HRESULT::from_win32(ERROR_DEVICE_NOT_CONNECTED.0);
-		
-		match err.code() {
-			DEVICE_NOT_CONNECTED => HidError::DeviceNotConnected,
-			_ => err.with_context("Failed to write").into()
+	fn get_write_error(err: windows_core::Error, ctx: &'static str, must_close: &mut bool) -> Error {
+		match err.as_win32() {
+			ERROR_DEVICE_NOT_CONNECTED => { *must_close = true; Error::new_simple(ErrorKind::DeviceNotConnected) },
+			_ => Error::new_os(ctx, err)
 		}
 	}
 	
-	fn get_read_error(err: Error) -> HidError {
-		const DEVICE_NOT_CONNECTED: HRESULT = HRESULT::from_win32(ERROR_DEVICE_NOT_CONNECTED.0);
-		
-		match err.code() {
-			DEVICE_NOT_CONNECTED => HidError::DeviceNotConnected,
-			_ => err.with_context("Failed to read").into()
+	fn get_read_error(err: windows_core::Error, ctx: &'static str, must_close: &mut bool) -> Error {
+		match err.as_win32() {
+			ERROR_DEVICE_NOT_CONNECTED => { *must_close = true; Error::new_simple(ErrorKind::DeviceNotConnected) },
+			_ => Error::new_os(ctx, err)
 		}
 	}
 }
 
-impl Clone for HidDevice {
+impl Clone for Device {
 	fn clone(&self) -> Self {
-		let input_len = self.info.input_report_byte_len;
-		let output_len = self.info.output_report_byte_len;
-		
-		Self {
-			info: Arc::clone(&self.info),
-			handle: None,
-			event: None,
-			input: vec![0u8; input_len as _],
-			output: vec![0u8; output_len as _],
-		}
+		Self::new(Arc::clone(&self.info))
 	}
 }
 
@@ -276,27 +240,31 @@ impl DeviceInfo {
 }
 
 #[derive(Default)]
-pub(super) struct DevicePath {
-	// The original SP_DEVICE_INTERFACE_DETAIL_DATA_W containing null-terminated, UTF-16 string.
-	pub path: Vec<u8>,
+pub struct DevicePath {
+	/// The original `SP_DEVICE_INTERFACE_DETAIL_DATA_W` containing null-terminated, UTF-16 string.
+	path: Box<[u8]>,
 }
 
 impl DevicePath {
-	pub fn as_ptr(&self) -> *const u16 {
+	pub(super) fn new(path: Box<[u8]>) -> Self {
+		Self { path }
+	}
+	
+	pub(super) fn as_ptr(&self) -> *const u16 {
 		self.path[4..].as_ptr() as _
 	}
 }
 
-impl ToString for DevicePath {
-	fn to_string(&self) -> String {
-		let size = ((self.path.len() - 4) / 2 - 1) as usize; // - 4(cbSize) / 2(u8 -> u16) - 1(NULL)
-		String::from_utf16(unsafe { slice::from_raw_parts(self.as_ptr(), size) })
-			.expect("device path should be valid UTF-16")
+impl fmt::Debug for DevicePath {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "{:?}", self.to_string())
 	}
 }
 
-impl Debug for DevicePath {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
-		f.write_str(&format!("{:?}", self.to_string()))
+impl fmt::Display for DevicePath {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		let size = (self.path.len() - 4) / 2 - 1; // - 4(cbSize) / 2(u8 -> u16) - 1(NULL)
+		let s = String::from_utf16_lossy(unsafe { slice::from_raw_parts(self.as_ptr(), size) });
+		write!(f, "{s}")
 	}
 }

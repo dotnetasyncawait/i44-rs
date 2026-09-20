@@ -1,9 +1,9 @@
 use std::sync::{Arc, LazyLock};
-use i44::hid::{self, DeviceInfo, HidDevice, HidError};
+use i44::hid::{self, DeviceInfo, Device, Error};
 use hid_msgs::*;
 use layers::*;
 
-type HidResult = Result<(), HidError>;
+type HidResult = Result<(), Error>;
 
 pub mod layers {
 	pub const NORMAL: u8 = 0;
@@ -27,8 +27,8 @@ pub mod hid_msgs {
 }
 
 static DEV_INFO: LazyLock<Arc<DeviceInfo>> = LazyLock::new(|| {
-	let info = hid::enumerate()
-		.expect("hid enumeration should not fail")
+	let info = hid::devices()
+		.expect("hid iteration should not fail")
 		.filter_map(|r| r.ok())
 		.filter(|di| di.vendor_id() == 0xFEED && di.product_id() == 0x03)
 		.filter(|di| di.usage_page() == 0xFF60 && di.usage_id() == 0x61)
@@ -38,8 +38,8 @@ static DEV_INFO: LazyLock<Arc<DeviceInfo>> = LazyLock::new(|| {
 	Arc::new(info)
 });
 
-pub fn new_device() -> HidDevice {
-	HidDevice::new(Arc::clone(&DEV_INFO))
+pub fn new_device() -> Device {
+	Device::new(Arc::clone(&DEV_INFO))
 }
 
 pub fn enable() -> HidResult {

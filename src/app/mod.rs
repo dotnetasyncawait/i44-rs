@@ -161,9 +161,12 @@ fn set_panic_hook() {
 	std::panic::set_hook(Box::new(|info| {
 		let loc = info.location().unwrap();
 		
-		let _text = format!(
+		let text = format!(
 			"panic at {}:{}:{}: '{}'",
 			loc.file(), loc.line(), loc.column(), info.payload_as_str().unwrap_or_default());
+		
+		// TODO: display with a window
+		println!("{text}");
 		
 		std::process::exit(0);
 	}));

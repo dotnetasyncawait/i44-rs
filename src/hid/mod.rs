@@ -2,6 +2,6 @@ mod device;
 mod error;
 mod iterator;
 
-pub use device::{HidDevice, DeviceInfo, DeviceAccess};
-pub use error::HidError;
-pub use iterator::enumerate;
+pub use device::{Device, DeviceInfo, DeviceAccess, DevicePath};
+pub use error::{Error, ErrorKind};
+pub use iterator::{devices, DeviceIter};

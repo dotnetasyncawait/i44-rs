@@ -9,7 +9,7 @@ pub enum ModeState {
 	NSymbol, // Normal + Symbol
 	ISymbol, // Insert + Symbol
 	SSymbol, // Select + Symbol
-	USymbol, // Upper Symbol
+	USymbol, // Upper-Symbol
 	Mouse,
 	System,
 	None
@@ -54,6 +54,8 @@ pub fn init() {
 fn hid_listener() {
 	let mut d = kb::new_device();
 	
+	// TODO: handle errors (device disconnection, etc) instead of unwrapping,
+	// displaying error info with a window. Fail fast (panic) on opening.
 	d.open().and_then(|_| d.write(&[HID_GET_LAYER])).unwrap();
 	let mut input = [0u8; 3];
 	

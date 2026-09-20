@@ -1,6 +1,6 @@
 use std::{env, sync::{OnceLock, atomic::{AtomicBool, Ordering}}, process::Command, path::PathBuf};
 use i44::misc::audio::{self, Device, DeviceType, VolumeNotfEvent};
-use i44::{common::error::{Error, OK}, tray_icon::{Icon, TrayIcon, IconEvent}};
+use i44::{common::error::{Error, OsError, OK}, tray_icon::{Icon, TrayIcon, IconEvent}};
 use super::sound;
 
 static MIC: OnceLock<Device> = OnceLock::new();
@@ -27,7 +27,8 @@ pub fn init() {
 		.add("FIFINE K670", dir.join("greenMic.ico")).expect("failed to add green icon")
 		.add("FIFINE K670 (muted)", dir.join("redMic.ico")).expect("failed to add red icon")
 		.handler(icon_handler)
-		.build();
+		.build()
+		.expect("failed to build icon");
 	
 	let muted = mic.get_mute().unwrap();
 	icon.display(muted as _).expect("failed to display icon");
@@ -45,7 +46,7 @@ pub fn init() {
 	PATHS.set(paths).expect("Paths should not be set");
 }
 
-pub fn tgl_mute() -> Result<bool, Error> {
+pub fn tgl_mute() -> Result<bool, OsError> {
 	get_mic().tgl_mute()
 }
 
@@ -63,7 +64,7 @@ fn get_paths() -> &'static Paths {
 
 fn icon_handler(_: &TrayIcon, event: IconEvent) -> Result<(), Error> {
 	match event {
-		IconEvent::LClick => tgl_mute().map(|_| ()),
+		IconEvent::LClick => Ok(_ = tgl_mute()?),
 		IconEvent::RClick => { Command::new("control").arg("mmsys.cpl,,1").spawn()?; OK },
 		IconEvent::DClick => OK,
 	}
@@ -73,8 +74,7 @@ fn volume_handler(event: &VolumeNotfEvent) -> Result<(), Error> {
 	if MUTED.swap(event.muted, Ordering::Relaxed) != event.muted {
 		get_icon().display(event.muted as _)?;
 		let paths = get_paths();
-		sound::play_vol(if event.muted { &paths.mic_muted } else { &paths.mic_unmuted }, 50)
-	} else {
-		OK
+		sound::play_vol(if event.muted { &paths.mic_muted } else { &paths.mic_unmuted }, 50)?;
 	}
+	OK
 }
