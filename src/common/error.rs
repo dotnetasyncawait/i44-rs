@@ -108,7 +108,7 @@ macro_rules! tagged_error {
 		
 		::pastey::paste! { pub use [<__private_$Err:snake>]::$Err; }
 		
-		#[derive(::core::cmp::PartialEq, ::core::cmp::Eq, ::core::clone::Clone, ::core::marker::Copy)]
+		#[derive(::core::cmp::PartialEq, ::core::cmp::Eq, ::core::clone::Clone, ::core::marker::Copy, ::core::fmt::Debug)]
 		pub enum $Kind {
 			$($Variant,)*
 		}
@@ -216,8 +216,8 @@ macro_rules! tagged_error {
 			impl ::core::fmt::Display for $Err {
 				fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
 					match self.repr.data() {
-						_ErrorData::Simple(kind) => ::core::fmt::Display::fmt(&kind, f),
-						_ErrorData::Custom(c) => ::core::fmt::Display::fmt(&c, f)
+						_ErrorData::Simple(kind) => ::core::write!(f, "{}({})", stringify!($Err), kind),
+						_ErrorData::Custom(c) => ::core::write!(f, "{}({}: {})", stringify!($Err), c.kind, c.err_ref())
 					}
 				}
 			}

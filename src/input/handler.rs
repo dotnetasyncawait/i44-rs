@@ -48,7 +48,7 @@ impl KeyMods {
 
 impl fmt::Display for KeyMods {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-		write!(f, "{:?} & {:?}", self.mods, self.key)
+		write!(f, "{} & {}", self.mods, self.key)
 	}
 }
 
@@ -336,7 +336,7 @@ impl Handler {
 		let hotkey = match (hh.func)() {
 			Ok(hotkey) => hotkey,
 			Err(err) => {
-				println!("{err:?} ({entry:?})"); // TODO: display the error with a window
+				log_err(entry, err);
 				return true;
 			}
 		};
@@ -416,7 +416,7 @@ impl Handler {
 				// Since actions on wheel keys are rare (not any for now), it should not be a problem.
 				thread::spawn(move || {
 					if let Err(err) = action(event) {
-						println!("From action: {err:?}; ({entry:?})"); // TODO: display the error with a window
+						log_err(entry, err);
 					}
 				});
 				true
@@ -424,7 +424,7 @@ impl Handler {
 			Hotkey::ActionRepeat(action) => {
 				thread::spawn(move || {
 					if let Err(err) = action() {
-						println!("From action_r: {err:?}; ({entry:?})"); // TODO: display the error with a window
+						log_err(entry, err);
 					}
 				});
 				true
@@ -744,7 +744,7 @@ impl Handler {
 		
 		thread::spawn(move || {
 			if let Err(err) = action(event) {
-				println!("From action: {err:?}; ({entry:?})"); // TODO: display the error with a window
+				log_err(entry, err);
 			}
 		});
 		
@@ -768,7 +768,7 @@ impl Handler {
 		thread::spawn(move || {
 			loop {
 				if let Err(err) = action() {
-					println!("From action_r: {err:?}; ({entry:?})"); // TODO: display the error with a window
+					log_err(entry, err);
 					break;
 				}
 				if rx.recv().is_err() {
@@ -831,8 +831,8 @@ impl Handler {
 				Hotkey::Action(action) => Self::kb_action(entry, action, h),
 				Hotkey::ActionRepeat(action) => Self::kb_action_r(entry, action, h),
 			}
-			Err(err) => {  
-				println!("from hotkey: {err:?}\n  Entry: {entry}"); // TODO: display the error in a window
+			Err(err) => {
+				log_err(entry, err);
 				true
 			}
 		}
@@ -944,7 +944,7 @@ fn should_mask_last(last_mod: Mods, curr_mods: Mods) -> bool {
 }
 
 fn should_mask_projected(mods_up: Mods, curr_mods: Mods) -> bool {
-	debug_assert!((mods_up.0 >> 4) == (mods_up.0 & 0xF), "mods must be projected: {:?}", mods_up);
+	debug_assert!((mods_up.0 >> 4) == (mods_up.0 & 0xF), "mods must be projected: {mods_up:?}");
 	matches!(mods_up, Mods::LA_RA | Mods::LW_RW) && (curr_mods & !mods_up).0 == 0
 }
 
@@ -984,6 +984,11 @@ fn mask_remap(should_mask: bool, pr_mods: Mods, mods_up: &mut Mods, mods_down: &
 			(Key::NONE, false, false)
 		}
 	}
+}
+
+fn log_err(entry: KeyMods, err: Error) {
+	// TODO: display with a window
+	println!("entry({entry}): {err}");
 }
 
 fn call_next(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {

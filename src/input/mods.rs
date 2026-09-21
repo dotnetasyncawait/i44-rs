@@ -1,4 +1,4 @@
-use std::{ops::{BitOr, BitOrAssign, BitAnd, BitAndAssign, Not}, fmt::{self, Debug, Formatter}};
+use std::{ops::{BitOr, BitOrAssign, BitAnd, BitAndAssign, Not}, fmt};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Mods(pub(super) u8);
@@ -111,8 +111,14 @@ impl Not for Mods {
 	}
 }
 
-impl Debug for Mods {
-	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+impl fmt::Debug for Mods {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(f, "Mods({:04b}_{:04b})", self.0 >> 4, self.0 & 0xF)
+	}
+}
+
+impl fmt::Display for Mods {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "{:04b}_{:04b}", self.0 >> 4, self.0 & 0xF)
 	}
 }

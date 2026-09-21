@@ -1,11 +1,17 @@
-use std::fmt::{self, Debug, Formatter};
+use std::fmt;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Key(pub(super) u16);
 
-impl Debug for Key {
-	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+impl fmt::Debug for Key {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(f, "Key(0x{:04X})", self.0)
+	}
+}
+
+impl fmt::Display for Key {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "{:04X}", self.0)
 	}
 }
 
