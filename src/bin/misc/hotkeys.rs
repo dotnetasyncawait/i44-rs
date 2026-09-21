@@ -1,6 +1,6 @@
 use i44::input::{hotkey::Hotkey::{self, *}, mods::Mods, keys::Key};
 use i44::common::error::{Error, OK};
-use i44::misc::{win, helpers};
+use i44::misc::win;
 use i44::apps::*;
 use i44::App;
 use super::{mode::{Mode, ModeState}, kb, mic};
@@ -516,14 +516,14 @@ fn lc_0() -> HotkeyResult {
 
 fn ls_up() -> HotkeyResult {
 	match Mode::get() {
-		ModeState::Normal => { helpers::center_cursor()?; Remap(Mods::NONE, Key::WH_UP_X2) },
+		ModeState::Normal => { win::center_cursor()?; Remap(Mods::NONE, Key::WH_UP_X2) },
 		_ => Suppress
 	}.ok()
 }
 
 fn ls_down() -> HotkeyResult {
 	match Mode::get() {
-		ModeState::Normal => { helpers::center_cursor()?; Remap(Mods::NONE, Key::WH_DOWN_X2) },
+		ModeState::Normal => { win::center_cursor()?; Remap(Mods::NONE, Key::WH_DOWN_X2) },
 		_ => Suppress
 	}.ok()
 }
@@ -553,8 +553,8 @@ fn la_down() -> HotkeyResult {
 fn lcs_up() -> HotkeyResult {
 	match Mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
-			vscode::NAME => { helpers::center_cursor()?; vscode::scroll_up_fast() },
-			tg::NAME => { helpers::center_cursor()?; tg::scroll_page_up() },
+			vscode::NAME => { win::center_cursor()?; vscode::scroll_up_fast() },
+			tg::NAME => { win::center_cursor()?; tg::scroll_page_up() },
 			_ => Default
 		},
 		_ => Default
@@ -564,8 +564,8 @@ fn lcs_up() -> HotkeyResult {
 fn lcs_down() -> HotkeyResult {
 	match Mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
-			vscode::NAME => { helpers::center_cursor()?; vscode::scroll_down_fast() },
-			tg::NAME => { helpers::center_cursor()?; tg::scroll_page_down() },
+			vscode::NAME => { win::center_cursor()?; vscode::scroll_down_fast() },
+			tg::NAME => { win::center_cursor()?; tg::scroll_page_down() },
 			_ => Default
 		},
 		_ => Default
@@ -596,14 +596,14 @@ fn lsa_down() -> HotkeyResult {
 
 fn ls_rs_up() -> HotkeyResult {
 	match Mode::get() {
-		ModeState::Select => { helpers::center_cursor()?; Remap(Mods::NONE, Key::WH_UP_X2) },
+		ModeState::Select => { win::center_cursor()?; Remap(Mods::NONE, Key::WH_UP_X2) },
 		_ => Suppress
 	}.ok()
 }
 
 fn ls_rs_down() -> HotkeyResult {
 	match Mode::get() {
-		ModeState::Select => { helpers::center_cursor()?; Remap(Mods::NONE, Key::WH_DOWN_X2) },
+		ModeState::Select => { win::center_cursor()?; Remap(Mods::NONE, Key::WH_DOWN_X2) },
 		_ => Suppress
 	}.ok()
 }
@@ -749,7 +749,7 @@ fn ls_xbutton1() -> HotkeyResult {
 }
 
 fn ls_lbutton() -> HotkeyResult {
-	Ok(Action(helpers::drag_win))
+	Ok(Action(|e| Ok(win::drag(e)?)))
 }
 
 fn f3() -> HotkeyResult {
@@ -803,7 +803,7 @@ fn f8() -> HotkeyResult {
 }
 
 fn f21() -> HotkeyResult {
-	Ok(Action(helpers::drag_win))
+	Ok(Action(|e| Ok(win::drag(e)?)))
 }
 
 fn f23() -> HotkeyResult {

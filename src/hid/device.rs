@@ -1,5 +1,5 @@
 use std::{fmt, slice, sync::Arc, time::Duration};
-use crate::{common::error::{Win32ErrExt, Win32ErrResExt}, misc::native::NonNullHANDLE};
+use crate::{common::{error::{Win32ErrExt, Win32ErrResExt}, native::NonNullHANDLE}};
 use super::error::{Error, ErrorKind};
 use windows_core::{Owned, PCWSTR};
 use windows::Win32::{

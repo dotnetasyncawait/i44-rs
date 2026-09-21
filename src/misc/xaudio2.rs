@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
-use crate::common::error::{Error, ErrResultExt};
-use core::{ffi::c_void, fmt};
+use crate::common::error::{OsError, Win32ErrResExt, tagged_error};
+use std::{ffi::c_void, fmt, io};
 use std::{collections::HashMap, fs, io::Read, mem, path::{Path, PathBuf}, sync::{Arc, Mutex, mpsc}, thread};
 use windows_core::{HRESULT, Interface};
 use windows::Win32::Media::Audio::{
@@ -10,7 +10,22 @@ use windows::Win32::Media::Audio::{
 		XAUDIO2_DEFAULT_CHANNELS, XAUDIO2_DEFAULT_FREQ_RATIO, XAUDIO2_DEFAULT_PROCESSOR, XAUDIO2_DEFAULT_SAMPLERATE,
 		XAUDIO2_END_OF_STREAM}};
 
-type Win32Result<T> = windows_core::Result<T>;
+tagged_error!(
+	PlayError,
+	PlayErrorKind { UnsupportedFormat, Io, Os }
+);
+
+impl From<io::Error> for PlayError {
+	fn from(value: io::Error) -> Self {
+		Self::new_custom(PlayErrorKind::Io, value)
+	}
+}
+
+impl From<OsError> for PlayError {
+	fn from(value: OsError) -> Self {
+		Self::new_custom(PlayErrorKind::Os, value)
+	}
+}
 
 pub struct XAudio2 {
 	audio: IXAudio2,
@@ -19,9 +34,9 @@ pub struct XAudio2 {
 }
 
 impl XAudio2 {
-	pub fn new() -> Result<Self, Error> {
+	pub fn new() -> Result<Self, OsError> {
 		let mut audio: Option<IXAudio2> = None;
-		unsafe { xaudio2_create(&mut audio, 0, XAUDIO2_DEFAULT_PROCESSOR).with_context(|| "failed to create XAudio2")?; }
+		unsafe { xaudio2_create(&mut audio, 0, XAUDIO2_DEFAULT_PROCESSOR)?; }
 		
 		let audio = audio.unwrap();
 		let mut m_voice: Option<IXAudio2MasteringVoice> = None;
@@ -30,7 +45,7 @@ impl XAudio2 {
 			&mut m_voice,
 			XAUDIO2_DEFAULT_CHANNELS,
 			XAUDIO2_DEFAULT_SAMPLERATE,
-			0, None, None, AudioCategory_GameEffects).with_context(|| "failed to create mastering voice")?; }
+			0, None, None, AudioCategory_GameEffects).context("failed to create mastering voice")?; }
 		
 		_ = m_voice;
 		let (tx, rx) = mpsc::channel::<usize>();
@@ -44,15 +59,15 @@ impl XAudio2 {
 		Ok(Self { audio, cache: Mutex::new(HashMap::new()), cb: VoiceCallback::new(tx) })
 	}
 	
-	pub fn play<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
+	pub fn play<P: AsRef<Path>>(&self, path: P) -> Result<(), PlayError> {
 		self.play_inner(path, None)
 	}
 	
-	pub fn play_vol<P: AsRef<Path>>(&self, path: P, vol: u8) -> Result<(), Error> {
+	pub fn play_vol<P: AsRef<Path>>(&self, path: P, vol: u8) -> Result<(), PlayError> {
 		self.play_inner(path, Some(vol))
 	}
 	
-	fn play_inner<P: AsRef<Path>>(&self, path: P, vol: Option<u8>) -> Result<(), Error> {
+	fn play_inner<P: AsRef<Path>>(&self, path: P, vol: Option<u8>) -> Result<(), PlayError> {
 		let mut cache = self.cache.lock().unwrap();
 		let key = path.as_ref();
 		
@@ -72,13 +87,17 @@ impl XAudio2 {
 		let mut source: Option<IXAudio2SourceVoice> = None;
 		
 		unsafe { self.audio.CreateSourceVoice(
-			&mut source, &chunks.fmt, 0, XAUDIO2_DEFAULT_FREQ_RATIO, &self.cb.as_interface(), None, None)?; } 
+			&mut source,
+			&chunks.fmt,
+			0,
+			XAUDIO2_DEFAULT_FREQ_RATIO,
+			&self.cb.as_interface(), None, None).context("failed to create source voice")?; } 
 		
 		let source = source.unwrap();
 		
 		if let Some(mut vol) = vol {
 			if vol > 100 { vol = 100; }
-			unsafe { source.SetVolume(vol as f32 / 100f32, 0)?; }
+			unsafe { source.SetVolume(vol as f32 / 100f32, 0).context("failed to set volume")?; }
 		}
 		
 		let buffer = XAUDIO2_BUFFER {
@@ -89,8 +108,8 @@ impl XAudio2 {
 			..Default::default()
 		};
 		
-		unsafe { source.SubmitSourceBuffer(&buffer, None)?; }
-		unsafe { source.Start(0, 0)?; }
+		unsafe { source.SubmitSourceBuffer(&buffer, None).context("failed so submit source buffer")?; }
+		unsafe { source.Start(0, 0).context("failed to start source voice")?; }
 		
 		Ok(())
 	}
@@ -107,14 +126,16 @@ impl fmt::Debug for XAudio2 {
 unsafe impl Sync for XAudio2 {}
 unsafe impl Send for XAudio2 {}
 
-unsafe fn xaudio2_create(audio2: *mut Option<IXAudio2>, flags: u32, processor: u32) -> Win32Result<()> {
+unsafe fn xaudio2_create(audio2: *mut Option<IXAudio2>, flags: u32, processor: u32) -> Result<(), OsError> {
 	windows_core::link!("xaudio2_9.dll" "system"
 		fn XAudio2Create(ppxaudio2: *mut *mut c_void, flags: u32, xaudio2processor: u32) -> HRESULT);
 	
-	unsafe { XAudio2Create(mem::transmute(audio2), flags, processor).ok() }
+	unsafe { XAudio2Create(mem::transmute(audio2), flags, processor)
+		.ok()
+		.context("failed to create XAudio2") }
 }
 
-fn parse<P: AsRef<Path>>(path: P) -> Result<Chunks, Error> {
+fn parse<P: AsRef<Path>>(path: P) -> Result<Chunks, PlayError> {
 	let mut file = fs::File::open(&path)?;
 	let t_size = file.metadata()?.len();
 	
@@ -150,7 +171,7 @@ fn parse<P: AsRef<Path>>(path: P) -> Result<Chunks, Error> {
 		return unsupported_format();
 	}
 	
-	let wave: WAVEFORMATEX = unsafe { std::mem::transmute(wave_buff) };
+	let wave: WAVEFORMATEX = unsafe { core::mem::transmute(wave_buff) };
 	
 	let mut data = fmt;
 	if file.read(&mut data)? != data.len() || !str::from_utf8(&data[..4]).is_ok_and(|d| d == "data") {
@@ -158,23 +179,24 @@ fn parse<P: AsRef<Path>>(path: P) -> Result<Chunks, Error> {
 	}
 	
 	let size = u32::from_le_bytes(data[4..8].try_into().unwrap()) as usize;
-	let mut data = Vec::with_capacity(size);
-	unsafe { data.set_len(size); }
+	
+	// TODO: is this sound?
+	let mut data = unsafe { Box::<[u8]>::new_uninit_slice(size).assume_init() };
 	
 	if file.read(&mut data)? != size {
-		return unsupported_format();
+		unsupported_format()
+	} else {
+		Ok(Chunks { fmt: wave, data })
 	}
-	
-	return Ok(Chunks { fmt: wave, data });
-	
-	fn unsupported_format() -> Result<Chunks, Error> {
-		Err(Error::other("unsupported format"))
-	}
+}
+
+fn unsupported_format<T>() -> Result<T, PlayError> {
+	Err(PlayError::new_simple(PlayErrorKind::UnsupportedFormat))
 }
 
 struct Chunks {
 	fmt: WAVEFORMATEX,
-	data: Vec<u8>,
+	data: Box<[u8]>,
 }
 
 impl fmt::Debug for Chunks {

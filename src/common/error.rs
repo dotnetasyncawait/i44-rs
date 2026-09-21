@@ -283,7 +283,6 @@ macro_rules! tagged_error {
 			impl ::core::ops::Drop for _Repr {
 				fn drop(&mut self) {
 					if let _ErrorData::Custom(c) = self.data_mut() {
-						println!("Drop Repr");
 						let _: ::std::boxed::Box<_Custom> = unsafe { ::std::boxed::Box::from_raw(c) };
 					}
 				}
@@ -316,7 +315,6 @@ macro_rules! tagged_error {
 			
 			impl ::core::ops::Drop for _Custom {
 				fn drop(&mut self) {
-					println!("Drop Custom");
 					let _ = unsafe { ::std::boxed::Box::from_raw(self.err.as_ptr()) };
 				}
 			}

@@ -1,5 +1,5 @@
 use std::{ptr, fmt};
-use crate::common::error::{Error, ErrResultExt, Win32Error};
+use crate::common::error::{Error, OsError, Win32ErrResExt};
 use windows::core::{Interface, implement};
 use windows::Win32::{
 	Devices::FunctionDiscovery::PKEY_Device_FriendlyName,
@@ -11,44 +11,44 @@ use windows::Win32::{
 
 type VolumeNotfHandler = fn(&VolumeNotfEvent) -> Result<(), Error>;
 
-pub fn default_device(d_type: DeviceType) -> Result<Device, Error> {
-	let d = unsafe { device_enumerator()?.GetDefaultAudioEndpoint(EDataFlow(d_type as _), eConsole)? };
+pub fn default_device(d_type: DeviceType) -> Result<Device, OsError> {
+	let d = unsafe { device_enumerator()?
+		.GetDefaultAudioEndpoint(EDataFlow(d_type as _), eConsole).context("failed to get default audio endpoint")? };
+	
 	Device::new(d, Some(d_type))
 }
 
-pub fn enum_devices(scope: DeviceScope, state: DeviceStates) -> Result<DeviceIter, Error> {
-	Ok(DeviceIter::new(scope, state).with_context(|| "Failed to create device iterator")?)
+pub fn devices(scope: DeviceScope, state: DeviceStates) -> Result<DeviceIter, OsError> {
+	DeviceIter::new(scope, state)
 }
 
 pub struct Device {
-	name: String,
+	name: Box<str>,
 	d_type: DeviceType,
 	d: IMMDevice,
 	volume: IAudioEndpointVolume,
 	callback: Option<IAudioEndpointVolumeCallback>,
 }
 
-impl Device {	
-	fn new(d: IMMDevice, d_type: Option<DeviceType>) -> Result<Self, Error> {
+impl Device {
+	fn new(d: IMMDevice, d_type: Option<DeviceType>) -> Result<Self, OsError> {
 		unsafe {
-			let store = d.OpenPropertyStore(STGM_READ).with_context(|| "Failed to open PropertyStore")?;
-			let prop = store.GetValue(&PKEY_Device_FriendlyName).with_context(|| "Failed to get FriendlyName")?;
+			let store = d.OpenPropertyStore(STGM_READ).context("failed to open PropertyStore")?;
+			let prop = store.GetValue(&PKEY_Device_FriendlyName).context("failed to get FriendlyName")?;
 			
 			assert_eq!(prop.vt(), VT_LPWSTR);
-			let name = prop.Anonymous.Anonymous.Anonymous.pwszVal
-				.to_string()
-				.expect("PKEY_Device_FriendlyName should be valid UTF-16 string");
+			let name = String::from_utf16_lossy(prop.Anonymous.Anonymous.Anonymous.pwszVal.as_wide()).into_boxed_str();
 			
 			let d_type = match d_type {
 				Some(t) => t,
 				None => {
-					let endpoint: IMMEndpoint = d.cast().expect("QueryInterface::IMMEndpoint should not fail");
-					let flow = endpoint.GetDataFlow().with_context(|| "Failed to get data flow")?;
+					let endpoint: IMMEndpoint = d.cast().context("failed to query IMMEndpoint")?;
+					let flow = endpoint.GetDataFlow().context("failed to get data flow")?;
 					if flow == eRender { DeviceType::Render } else { DeviceType::Capture }
 				}
 			};
+			let volume: IAudioEndpointVolume = d.Activate(CLSCTX_ALL, None).context("failed to activate device")?;
 			
-			let volume: IAudioEndpointVolume = d.Activate(CLSCTX_ALL, None)?;
 			Ok(Self { name, d_type, d, volume, callback: None })
 		}
 	}
@@ -59,7 +59,7 @@ impl Device {
 	
 	pub fn is_capture(&self) -> bool { self.d_type == DeviceType::Capture }
 	
-	pub fn state(&self) -> Result<DeviceState, Error> {
+	pub fn state(&self) -> Result<DeviceState, OsError> {
 		Ok(match unsafe { self.d.GetState()? } {
 			DEVICE_STATE_ACTIVE => DeviceState::Active,
 			DEVICE_STATE_DISABLED => DeviceState::Disabled,
@@ -69,31 +69,31 @@ impl Device {
 		})
 	}
 	
-	pub fn set_mute(&self, mute: bool) -> Result<(), Error> {
+	pub fn set_mute(&self, mute: bool) -> Result<(), OsError> {
 		unsafe { Ok(self.volume.SetMute(mute, ptr::null())?) }
 	}
 	
-	pub fn get_mute(&self) -> Result<bool, Error> {
+	pub fn get_mute(&self) -> Result<bool, OsError> {
 		unsafe { Ok(self.volume.GetMute()?.as_bool()) }
 	}
 	
-	pub fn tgl_mute(&self) -> Result<bool, Error> {
+	pub fn tgl_mute(&self) -> Result<bool, OsError> {
 		let state = self.get_mute()?;
 		self.set_mute(!state)?;
 		Ok(!state)
 	}
 	
-	pub fn set_volume(&self, vol: i8) -> Result<(), Error> {
+	pub fn set_volume(&self, vol: i8) -> Result<(), OsError> {
 		unsafe { Ok(self.volume.SetMasterVolumeLevelScalar(vol.clamp(0, 100) as f32 / 100f32, ptr::null())?) }
 	}
 	
-	pub fn get_volume(&self) -> Result<i8, Error> {
+	pub fn get_volume(&self) -> Result<i8, OsError> {
 		unsafe { Ok((self.volume.GetMasterVolumeLevelScalar()? * 100f32).round() as i8) }
 	}
 	
-	pub fn on_volume_update(&mut self, f: VolumeNotfHandler) -> Result<(), Error> {
+	pub fn on_volume_update(&mut self, f: VolumeNotfHandler) -> Result<(), OsError> {
 		if self.callback.is_some() {
-			return Err(Error::other("TODO: multiple callbacks"));
+			unimplemented!("multiple callbacks");
 		}
 		
 		let callback: IAudioEndpointVolumeCallback = AudioEndpointVolumeCallback(f).into();
@@ -178,17 +178,20 @@ pub struct DeviceIter {
 }
 
 impl DeviceIter {
-	fn new(scope: DeviceScope, state: DeviceStates) -> Result<Self, Win32Error> {
+	fn new(scope: DeviceScope, state: DeviceStates) -> Result<Self, OsError> {
 		unsafe {
-			let collection = device_enumerator()?.EnumAudioEndpoints(EDataFlow(scope as _), DEVICE_STATE(state.0))?;
-			let count = collection.GetCount()?;
-			Ok(Self { collection: if count > 0 { Some(collection) } else { None }, count, index: 0, scope })
+			let collection = device_enumerator()?
+				.EnumAudioEndpoints(EDataFlow(scope as _), DEVICE_STATE(state.0))
+				.context("failed to create device collection")?;
+			
+			let count = collection.GetCount().context("failed to get device collection count")?;
+			Ok(Self { collection: (count > 0).then_some(collection), count, index: 0, scope })
 		}
 	}
 }
 
 impl Iterator for DeviceIter {
-	type Item = Result<Device, Error>;
+	type Item = Result<Device, OsError>;
 
 	fn next(&mut self) -> Option<Self::Item> {
 		if self.count == 0 {
@@ -196,8 +199,8 @@ impl Iterator for DeviceIter {
 			return None;
 		}
 		
-		let collection = self.collection.as_ref().expect("collection should be Some if index < count");
-		let d_res = unsafe { collection.Item(self.index) };
+		let collection = self.collection.as_ref().expect("collection should be Some if count > 0");
+		let d_res = unsafe { collection.Item(self.index).context("failed to get collection item") };
 		
 		self.index += 1;
 		if self.index == self.count {
@@ -206,22 +209,20 @@ impl Iterator for DeviceIter {
 			self.collection = None;
 		}
 		
-		Some(match d_res {
-			Ok(d) => {
-				let d_type = match self.scope {
-					DeviceScope::Render => Some(DeviceType::Render),
-					DeviceScope::Capture => Some(DeviceType::Capture),
-					DeviceScope::All => None
-				};
-				Device::new(d, d_type)
-			},
-			Err(err) => Err(err.into())
-		})
+		Some(d_res.and_then(|d| {
+			let d_type = match self.scope {
+				DeviceScope::Render => Some(DeviceType::Render),
+				DeviceScope::Capture => Some(DeviceType::Capture),
+				DeviceScope::All => None
+			};
+			Device::new(d, d_type)
+		}))
 	}
 }
 
-fn device_enumerator() -> Result<IMMDeviceEnumerator, Win32Error> {
-	unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
+fn device_enumerator() -> Result<IMMDeviceEnumerator, OsError> {
+	unsafe { CoCreateInstance(
+		&MMDeviceEnumerator, None, CLSCTX_ALL).context("failed to instantiate device enumerator") }
 }
 
 pub struct VolumeNotfEvent {
@@ -244,7 +245,7 @@ impl fmt::Debug for VolumeNotfEvent {
 pub struct AudioEndpointVolumeCallback(VolumeNotfHandler);
 
 impl IAudioEndpointVolumeCallback_Impl for AudioEndpointVolumeCallback_Impl {
-	fn OnNotify(&self, notify: *mut AUDIO_VOLUME_NOTIFICATION_DATA) -> Result<(), Win32Error> {
+	fn OnNotify(&self, notify: *mut AUDIO_VOLUME_NOTIFICATION_DATA) -> Result<(), windows_core::Error> {
 		let n = unsafe { &*notify };
 		
 		let event = VolumeNotfEvent {
