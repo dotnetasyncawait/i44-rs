@@ -6,7 +6,8 @@ use windows::Win32::{
 	System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW},
 	Foundation::{GetLastError, SetLastError, WIN32_ERROR, HWND, POINT, RECT},
 	UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-		GetClassNameW, GA_ROOT, GetAncestor, GetCursorPos, GetWindowRect, MoveWindow, SetCursorPos, WindowFromPoint}};
+		GetClassNameW, GA_ROOT, GetAncestor, GetCursorPos, GetWindowRect, MoveWindow, SetCursorPos, WindowFromPoint,
+		IsZoomed, IsIconic, SetForegroundWindow}};
 
 tagged_error!(
 	Error,
@@ -22,6 +23,17 @@ impl Error {
 impl From<OsError> for Error {
 	fn from(value: OsError) -> Self {
 		Self::new_custom(ErrorKind::Os, value)
+	}
+}
+
+tagged_error!(
+	WinDragError,
+	WinDragErrorKind { NotFound, Maximized, Os }
+);
+
+impl From<OsError> for WinDragError {
+	fn from(value: OsError) -> Self {
+		Self::new_custom(WinDragErrorKind::Os, value)
 	}
 }
 
@@ -141,6 +153,14 @@ fn class_inner(hwnd: HWND) -> Result<String, OsError> {
 	}
 }
 
+pub fn is_maximized(hwnd: HWND) -> bool {
+	!hwnd.is_invalid() && unsafe { IsZoomed(hwnd).as_bool() }
+}
+
+pub fn is_minimized(hwnd: HWND) -> bool {
+	!hwnd.is_invalid() && unsafe { IsIconic(hwnd).as_bool() }
+}
+
 fn inner(hwnd: HWND, if_invalid: ErrorKind, f: impl FnOnce() -> Result<String, OsError>) -> Result<String, Error> {
 	if hwnd.is_invalid() {
 		Err(Error::new_simple(if_invalid))
@@ -151,9 +171,10 @@ fn inner(hwnd: HWND, if_invalid: ErrorKind, f: impl FnOnce() -> Result<String, O
 
 /// Drags a window (that's currently under the cursor) while the specified key is down.
 /// # Errors
-/// - [ErrorKind::NotFound]: no window under the cursor
-/// - [ErrorKind::Os]: system error
-pub fn drag(key: KeyEvent) -> Result<(), Error> {
+/// - [WinDragErrorKind::NotFound]: no window is under the cursor
+/// - [WinDragErrorKind::Maximized]: target window is maximized; therefore, it won't be moved
+/// - [WinDragErrorKind::Os]: system error
+pub fn drag(key: KeyEvent) -> Result<(), WinDragError> {
 	let mut point = POINT::default();
 	unsafe { GetCursorPos(&mut point).context("failed to get cursor pos")?; }
 	
@@ -162,13 +183,23 @@ pub fn drag(key: KeyEvent) -> Result<(), Error> {
 	
 	let hwnd = unsafe { WindowFromPoint(point) };
 	if hwnd.is_invalid() {
-		return Err(Error::new_simple(ErrorKind::NotFound));
+		return Err(WinDragError::new_simple(WinDragErrorKind::NotFound));
+	}
+	let hwnd = unsafe { GetAncestor(hwnd, GA_ROOT) };
+	
+	if is_maximized(hwnd) {
+		return Err(WinDragError::new_simple(WinDragErrorKind::Maximized))
 	}
 	
-	// TODO: check if the window is in fullscreen
-	// TODO: bring it to the foreground
-	
-	let hwnd = unsafe { GetAncestor(hwnd, GA_ROOT) };
+	if unsafe { !SetForegroundWindow(hwnd).as_bool() } {
+		let msg = format!("failed to set foreground window ({hwnd:?})");
+		if cfg!(debug_assertions) {
+			println!("{msg}");
+			return Ok(());
+		} else {
+			panic!("{msg}");
+		}
+	}
 	
 	let mut rect = RECT::default();
 	unsafe { GetWindowRect(hwnd, &mut rect).context("failed to get window rect")?; }
