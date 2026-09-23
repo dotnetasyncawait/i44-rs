@@ -149,10 +149,10 @@ fn icon_handler(icon: &TrayIcon, event: IconEvent) -> Result<(), Error> {
 	
 	match res.0 {
 		0 => {}, // cancelled
-		SUSPEND => return Ok(icon.display(handler::suspend_tgl() as _)?),
-		EXIT => self::exit(),
+		SUSPEND => icon.display(handler::suspend_tgl() as _)?,
+		EXIT => exit(),
 		_ => unreachable!()
-	};
+	}
 	
 	OK
 }

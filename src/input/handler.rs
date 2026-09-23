@@ -336,7 +336,7 @@ impl Handler {
 		let hotkey = match (hh.func)() {
 			Ok(hotkey) => hotkey,
 			Err(err) => {
-				log_err(entry, err);
+				display_err(entry, err);
 				return true;
 			}
 		};
@@ -416,7 +416,7 @@ impl Handler {
 				// Since actions on wheel keys are rare (not any for now), it should not be a problem.
 				thread::spawn(move || {
 					if let Err(err) = action(event) {
-						log_err(entry, err);
+						display_err(entry, err);
 					}
 				});
 				true
@@ -424,7 +424,7 @@ impl Handler {
 			Hotkey::ActionRepeat(action) => {
 				thread::spawn(move || {
 					if let Err(err) = action() {
-						log_err(entry, err);
+						display_err(entry, err);
 					}
 				});
 				true
@@ -744,7 +744,7 @@ impl Handler {
 		
 		thread::spawn(move || {
 			if let Err(err) = action(event) {
-				log_err(entry, err);
+				display_err(entry, err);
 			}
 		});
 		
@@ -768,7 +768,7 @@ impl Handler {
 		thread::spawn(move || {
 			loop {
 				if let Err(err) = action() {
-					log_err(entry, err);
+					display_err(entry, err);
 					break;
 				}
 				if rx.recv().is_err() {
@@ -832,7 +832,7 @@ impl Handler {
 				Hotkey::ActionRepeat(action) => Self::kb_action_r(entry, action, h),
 			}
 			Err(err) => {
-				log_err(entry, err);
+				display_err(entry, err);
 				true
 			}
 		}
@@ -986,7 +986,7 @@ fn mask_remap(should_mask: bool, pr_mods: Mods, mods_up: &mut Mods, mods_down: &
 	}
 }
 
-fn log_err(entry: KeyMods, err: Error) {
+fn display_err(entry: KeyMods, err: Error) {
 	// TODO: display with a window
 	println!("entry({entry}): {err}");
 }

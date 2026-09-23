@@ -94,12 +94,6 @@ fn set_text_inner(text: impl AsRef<str>) -> Result<(), OsError> {
 	}
 }
 
-const BIT_DIB:         u8 = 0x01;
-const BIT_DIBV5:       u8 = 0x02;
-const BIT_TEXT:        u8 = 0x10;
-const BIT_OEMTEXT:     u8 = 0x20;
-const BIT_UNICODETEXT: u8 = 0x40;
-
 pub fn get_raw() -> Result<RawData, OsError> {
 	open_clipb()?;
 	let raw_res = get_raw_inner();
@@ -128,6 +122,12 @@ fn get_raw_inner() -> Result<RawData, OsError> {
 	let mut next = 0u32;
 	while let fmt = unsafe { EnumClipboardFormats(next) } && fmt != 0 {
 		next = fmt;
+		
+		const BIT_DIB:         u8 = 0x01;
+		const BIT_DIBV5:       u8 = 0x02;
+		const BIT_TEXT:        u8 = 0x10;
+		const BIT_OEMTEXT:     u8 = 0x20;
+		const BIT_UNICODETEXT: u8 = 0x40;
 		
 		match CLIPBOARD_FORMAT(fmt as u16) {
 			// GlobalSize() fails for CF_BITMAP, so we skip it and use CF_DIB or CF_DIBV5 instead.
