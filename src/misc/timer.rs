@@ -7,7 +7,7 @@ use windows::Win32::{
 
 static QUEUE: OnceLock<usize> = OnceLock::new();
 
-pub fn init() {
+pub(crate) fn init() {
 	let queue = unsafe { CreateTimerQueue().expect("failed to create timer queue") };
 	QUEUE.set(queue.0 as usize).expect("timer::init() should only be called once");
 }

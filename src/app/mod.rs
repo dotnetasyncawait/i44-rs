@@ -9,9 +9,10 @@ use main_win::{MainWindow, OnMsgCallback, OnExitCallback, Icon};
 use std::{process, sync::{OnceLock, Mutex}};
 use windows::core::{Owned, w};
 use windows::Win32::{
-	Foundation::{HWND, POINT, LPARAM, WPARAM},
+	System::Threading::CreateMutexW,
+	Foundation::{HWND, POINT, LPARAM, WPARAM, ERROR_ALREADY_EXISTS, GetLastError},
 	UI::WindowsAndMessaging::{AppendMenuW, CreatePopupMenu, TrackPopupMenuEx, GetCursorPos, MF_STRING, MF_CHECKED,
-		TPM_BOTTOMALIGN, TPM_RETURNCMD, PostThreadMessageW, SetForegroundWindow, WM_QUIT},
+		TPM_BOTTOMALIGN, TPM_RETURNCMD, PostThreadMessageW, SetForegroundWindow, WM_QUIT, MessageBoxW, MB_ICONERROR},
 	System::Com::{COINIT_MULTITHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx}};
 
 static ICON: OnceLock<Icon> = OnceLock::new();
@@ -23,6 +24,7 @@ pub struct App {
 
 pub fn new() -> App {
 	set_panic_hook();
+	ensure_singleton();
 	unsafe { CoInitializeEx(None, COINIT_MULTITHREADED | COINIT_DISABLE_OLE1DDE).unwrap(); }
 	
 	let win = MainWindow::new();
@@ -41,6 +43,9 @@ pub fn new() -> App {
 	ICON.set(win.add_icon(icon)).expect("icon should not be set");
 	
 	WIN.set(win).expect("WIN should not be set");
+	
+	crate::misc::timer::init();
+	
 	App { h: Some(Handler::new()) }
 }
 
@@ -168,6 +173,16 @@ fn set_panic_hook() {
 		// TODO: display with a window
 		println!("{text}");
 		
-		std::process::exit(0);
+		process::exit(0);
 	}));
+}
+
+fn ensure_singleton() {
+	unsafe {
+		let _mutex = CreateMutexW(None, false, w!("Global\\i44_mtx")).expect("failed to create a named mutex");
+		if GetLastError() == ERROR_ALREADY_EXISTS {
+			_ = MessageBoxW(None, w!("Application is already running"), w!("Error"), MB_ICONERROR);
+			process::exit(0)
+		}
+	}
 }
