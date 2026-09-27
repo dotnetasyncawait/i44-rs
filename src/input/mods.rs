@@ -40,6 +40,7 @@ impl Mods {
 	pub const LCSAW: Mods = Mods::LCSA.or(Mods::LW);
 	pub const RCSAW: Mods = Mods::RCSA.or(Mods::RW);
 	
+	pub const LC_RC: Mods = Mods::LC.or(Mods::RC);
 	pub const LC_RS: Mods = Mods::LC.or(Mods::RS);
 	pub const LS_RS: Mods = Mods::LS.or(Mods::RS);
 	pub const LA_RA: Mods = Mods::LA.or(Mods::RA);

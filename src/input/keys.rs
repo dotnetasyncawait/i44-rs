@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, collections::HashMap};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Key(pub(super) u16);
@@ -84,6 +84,7 @@ impl Key {
 	pub const PERIOD:     Key = Key(0x0034);
 	pub const FSLASH:     Key = Key(0x0035);
 	
+	// TODO: differentiate between NumLock on/off (NUMPAD_END(0x61_004F) and NUMPAD1(0x23_004F))
 	pub const KEYPAD1:       Key = Key(0x004F); // Keypad
 	pub const KEYPAD2:       Key = Key(0x0050);
 	pub const KEYPAD3:       Key = Key(0x0051);
@@ -157,7 +158,6 @@ impl Key {
 	pub const CAPSLOCK:    Key = Key(0x003A); // Misc
 	pub const SCROLL_LOCK: Key = Key(0x0046);
 	pub const NUMLOCK:     Key = Key(0xE045);
-	
 	pub const PRINTSCREEN: Key = Key(0xE037);
 	pub const PAUSE:       Key = Key(0x0045);
 	pub const APP:         Key = Key(0xE05D);
@@ -255,4 +255,131 @@ impl Key {
 	}
 
 	pub(super) fn is_extended_key(self) -> bool { self.0 & 0xE000 == 0xE000 }
+	
+	pub(super) fn info(self) -> Option<KeyInfo> {
+		get_info().get(&self).copied()
+	}
+}
+
+#[derive(Debug)]
+pub(super) struct Led(pub u8);
+
+impl Led {
+	const CAPS_BIT:   u8 = 0b001;
+	const NUM_BIT:    u8 = 0b010;
+	const SCROLL_BIT: u8 = 0b100;
+	
+	pub fn update_state(&mut self, key: Key) {
+		match key {
+			Key::CAPSLOCK => self.0 ^= Self::CAPS_BIT,
+			Key::NUMLOCK => self.0 ^= Self::NUM_BIT,
+			Key::SCROLL_LOCK => self.0 ^= Self::SCROLL_BIT,
+			_ => {}
+		}
+	}
+	
+	pub fn is_capslock_on(&self) -> bool {
+		self.0 & Self::CAPS_BIT != 0
+	}
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct KeyInfo(pub KeyType, pub u8, pub u8);
+
+impl KeyInfo {
+	fn letter(lower: char, upper: char) -> Self {
+		Self(KeyType::Letter, lower as u8, upper as u8)
+	}
+	fn symb(lower: char, upper: char) -> Self {
+		Self(KeyType::Symbol, lower as u8, upper as u8)
+	}
+	fn num(lower: char, upper: char) -> Self {
+		Self(KeyType::Number, lower as u8, upper as u8)
+	}
+	fn nav() -> Self {
+		Self(KeyType::Navigation, 0, 0)
+	}
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum KeyType {
+	Letter,
+	Symbol,
+	Number,
+	// TODO: Numpad
+	Navigation,
+}
+
+fn get_info() -> &'static HashMap<Key, KeyInfo> {
+	use std::sync::OnceLock;
+	
+	static KEY_INFO: OnceLock<HashMap<Key, KeyInfo>> = OnceLock::new();
+	
+	KEY_INFO.get_or_init(|| HashMap::from([
+		(Key::A, KeyInfo::letter('a', 'A')),
+		(Key::B, KeyInfo::letter('b', 'B')),
+		(Key::C, KeyInfo::letter('c', 'C')),
+		(Key::D, KeyInfo::letter('d', 'D')),
+		(Key::E, KeyInfo::letter('e', 'E')),
+		(Key::F, KeyInfo::letter('f', 'F')),
+		(Key::G, KeyInfo::letter('g', 'G')),
+		(Key::H, KeyInfo::letter('h', 'H')),
+		(Key::I, KeyInfo::letter('i', 'I')),
+		(Key::J, KeyInfo::letter('j', 'J')),
+		(Key::K, KeyInfo::letter('k', 'K')),
+		(Key::L, KeyInfo::letter('l', 'L')),
+		(Key::M, KeyInfo::letter('m', 'M')),
+		(Key::N, KeyInfo::letter('n', 'N')),
+		(Key::O, KeyInfo::letter('o', 'O')),
+		(Key::P, KeyInfo::letter('p', 'P')),
+		(Key::Q, KeyInfo::letter('q', 'Q')),
+		(Key::R, KeyInfo::letter('r', 'R')),
+		(Key::S, KeyInfo::letter('s', 'S')),
+		(Key::T, KeyInfo::letter('t', 'T')),
+		(Key::U, KeyInfo::letter('u', 'U')),
+		(Key::V, KeyInfo::letter('v', 'V')),
+		(Key::W, KeyInfo::letter('w', 'W')),
+		(Key::X, KeyInfo::letter('x', 'X')),
+		(Key::Y, KeyInfo::letter('y', 'Y')),
+		(Key::Z, KeyInfo::letter('z', 'Z')),
+		
+		(Key::DASH,       KeyInfo::symb('-',  '_')),
+		(Key::EQUALS,     KeyInfo::symb('=',  '+')),
+		(Key::LBRACE,     KeyInfo::symb('[',  '{')),
+		(Key::RBRACE,     KeyInfo::symb(']',  '}')),
+		(Key::BSLASH,     KeyInfo::symb('\\', '|')),
+		(Key::SEMICOLON,  KeyInfo::symb(';',  ':')),
+		(Key::APOSTROPHE, KeyInfo::symb('\'', '"')),
+		(Key::GRAVE,      KeyInfo::symb('`',  '~')),
+		(Key::COMMA,      KeyInfo::symb(',',  '<')),
+		(Key::PERIOD,     KeyInfo::symb('.',  '>')),
+		(Key::FSLASH,     KeyInfo::symb('/',  '?')),
+		
+		(Key::NUM1, KeyInfo::num('1', '!')),
+		(Key::NUM2, KeyInfo::num('2', '@')),
+		(Key::NUM3, KeyInfo::num('3', '#')),
+		(Key::NUM4, KeyInfo::num('4', '$')),
+		(Key::NUM5, KeyInfo::num('5', '%')),
+		(Key::NUM6, KeyInfo::num('6', '^')),
+		(Key::NUM7, KeyInfo::num('7', '&')),
+		(Key::NUM8, KeyInfo::num('8', '*')),
+		(Key::NUM9, KeyInfo::num('9', '(')),
+		(Key::NUM0, KeyInfo::num('0', ')')),
+		
+		(Key::ESCAPE,  KeyInfo::nav()),
+		(Key::ENTER,   KeyInfo::nav()),
+		(Key::TAB,     KeyInfo::nav()),
+		(Key::SPACE,   KeyInfo::nav()),
+		(Key::BS,      KeyInfo::nav()),
+		(Key::DEL,     KeyInfo::nav()),
+		(Key::INSERT,  KeyInfo::nav()),
+		(Key::HOME,    KeyInfo::nav()),
+		(Key::END,     KeyInfo::nav()),
+		(Key::PG_UP,   KeyInfo::nav()),
+		(Key::PG_DOWN, KeyInfo::nav()),
+		(Key::UP,      KeyInfo::nav()),
+		(Key::DOWN,    KeyInfo::nav()),
+		(Key::LEFT,    KeyInfo::nav()),
+		(Key::RIGHT,   KeyInfo::nav()),
+	]))
 }

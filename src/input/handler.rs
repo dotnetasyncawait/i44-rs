@@ -1,15 +1,20 @@
-use super::{hotkey::Hotkey, mods::Mods, keys::Key, input_builder::InputBuilder, extensions::InputExt};
+use super::{
+	hotkey::{Hotkey, HotkeyHandler},
+	hotstr::{Hotstr, HotstrTrie},
+	mods::Mods,
+	keys::{Key, KeyType, Led},
+	input_builder::InputBuilder,
+	extensions::{InputExt, VecDequeExt, FullMode},
+	constants::{CALL_NEXT, CALL_NEXT_END, CACHED_EVENT}, key_event::{KeyEvent, KeyEventNotifier}};
 use crate::common::error::Error;
-use super::constants::{CALL_NEXT, CALL_NEXT_END, CACHED_EVENT};
-use super::key_event::{KeyEvent, KeyEventNotifier};
-use std::{collections::{HashMap, hash_map::Entry}, ptr, thread::{self, JoinHandle}};
+use std::{collections::{HashMap, hash_map::Entry, VecDeque}, ptr, thread::{self, JoinHandle}, fmt, borrow::Cow};
 use std::sync::{mpsc::{self, SyncSender, TrySendError}, Arc, OnceLock, Mutex, MutexGuard, atomic::{AtomicBool, Ordering}};
-use std::fmt::{self, Debug, Formatter};
 use windows::core::Owned;
 use windows::Win32::{Foundation::{LPARAM, LRESULT, WPARAM}, System::Threading::GetCurrentThreadId};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize};
 use windows::Win32::UI::{
-	Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VK_TO_VSC_EX, VK_BROWSER_BACK, VK_LAUNCH_APP2, INPUT, SendInput},
+	Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VK_TO_VSC_EX, VK_BROWSER_BACK, VK_LAUNCH_APP2, INPUT, SendInput,
+		GetKeyState, VK_CAPITAL, VK_NUMLOCK, VK_SCROLL},
 	WindowsAndMessaging::{WH_KEYBOARD_LL, WH_MOUSE_LL, LLKHF_UP, LLKHF_EXTENDED, LLKHF_INJECTED, MSG, LLMHF_INJECTED,
 		MSLLHOOKSTRUCT, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
 		WM_MOUSEHWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP, XBUTTON1, XBUTTON2, KBDLLHOOKSTRUCT,
@@ -21,22 +26,13 @@ pub struct Handler {
 	suppressed: HashMap<Key, bool>, // bool: once
 	curr_h: Option<CurrHotkey>,
 	v_mods: Mods,
+	led: Led,
 	send_count: u8,
 	sender: mpsc::Sender<InputMsg>,
 	last_mod: Mods,
 	last_h_mods: Mods,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct HotkeyHandler {
-	func: fn() -> Result<Hotkey, Error>,
-	exempt: bool,
-}
-
-impl HotkeyHandler {
-	fn new(f: fn() -> Result<Hotkey, Error>, exempt: bool) -> Self {
-		Self { func: f, exempt }
-	}
+	hotstr_buf: VecDeque<u8>,
+	hotstrs: HotstrTrie,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -47,7 +43,7 @@ impl KeyMods {
 }
 
 impl fmt::Display for KeyMods {
-	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(f, "{} & {}", self.mods, self.key)
 	}
 }
@@ -93,26 +89,25 @@ impl Handler {
 			suppressed: HashMap::new(),
 			curr_h: None,
 			v_mods: Mods::NONE,
+			led: Led(0),
 			send_count: 0,
 			sender: placeholder,
 			last_mod: Mods::NONE,
 			last_h_mods: Mods::NONE,
+			hotstr_buf: VecDeque::with_capacity(32),
+			hotstrs: HotstrTrie::new(),
 		}
 	}
 	
-	pub fn hotkey(&mut self, mods: Mods, key: Key, f: fn() -> Result<Hotkey, Error>) {
-		self.hotkey_inner(KeyMods::new(mods, key), f, false);
-	}
-	
-	pub fn hotkey_exempt(&mut self, mods: Mods, key: Key, f: fn() -> Result<Hotkey, Error>) {
-		self.hotkey_inner(KeyMods::new(mods, key), f, true);
-	}
-	
-	fn hotkey_inner(&mut self, entry: KeyMods, f: fn() -> Result<Hotkey, Error>, exempt: bool) {
-		match self.hotkeys.entry(entry) {
-			Entry::Occupied(o) => panic!("hotkey {:?} already exists", o.key()),
+	pub fn hotkey(&mut self, mods: Mods, key: Key, f: fn() -> Result<Hotkey, Error>, exempt: bool) {
+		match self.hotkeys.entry(KeyMods::new(mods, key)) {
+			Entry::Occupied(o) => panic!("hotkey {} already exists", o.key()),
 			Entry::Vacant(v) => v.insert_entry(HotkeyHandler::new(f, exempt)),
 		};
+	}
+	
+	pub fn hotstr(&mut self, entry: &str, f: fn() -> Result<Hotstr, Error>, exempt: bool) {
+		self.hotstrs.add(entry, f, exempt);
 	}
 	
 	pub fn start(mut self) -> (JoinHandle<()>, u32) {
@@ -129,11 +124,19 @@ impl Handler {
 		});
 		self.sender = tx;
 		
+		let (tx, rx) = mpsc::sync_channel::<usize>(0);
+		let jh = thread::spawn(|| Self::mq_handler(tx));
+		
+		let msg = rx.recv().unwrap();
+		let led_state = msg as u8 & 0b111;
+		let thread_id = (msg >> 32) as u32;
+		
+		self.led.0 = led_state;
 		HANDLER.set(Mutex::new(self)).expect("handler should not be set");
 		
-		let (tx, rx) = mpsc::channel::<u32>();
-		let jh = thread::spawn(|| Self::mq_handler(tx));
-		let thread_id = rx.recv().unwrap();
+		// mq_handler is waiting for us to disconnect so it can start processing input events.
+		// Close the receiver only after full state-initialization.
+		drop(rx); 
 		
 		(jh, thread_id)
 	}
@@ -278,6 +281,13 @@ impl Handler {
 		if pressed {
 			if Self::kb_key_down(key, mod_bit, &mut h) {
 				true
+			} else if mod_bit.is_none() {
+				if Self::handle_hotstr(key, &mut h) {
+					true
+				} else {
+					h.led.update_state(key);
+					false
+				}
 			} else {
 				h.last_mod = mod_bit;
 				h.v_mods |= mod_bit;
@@ -577,12 +587,15 @@ impl Handler {
 	fn kb_remap_repeat(entry: KeyMods, remap: KeyMods, key: Key, mod_bit: Mods, h: &mut MutexGuard<'_, Handler>) -> bool {
 		if key == entry.key {
 			let key_to_repeat = remap.key;
-			
-			return if key_to_repeat.is_mouse_button() { // we don't repeat mouse buttons
-				true
-			} else if key == key_to_repeat {
-				false
-			} else {
+			if !key_to_repeat.is_mouse_button() { // we don't repeat mouse buttons
+				
+				// We could check if key == key_to_repeat and simply return false here (instead of simulating input), 
+				// but that would make it impossible for the topmost caller to distinguish whether the key is actually
+				// handled, leading to erroneously calling a hotstring handler.
+				// Changing the signature to Option<bool> would also require all the subsequent/neighboring handlers
+				// to be changed as well. Considering that this case is rare (mods_1+k -> mods_2+k), it's probably not
+				// worth it.
+				
 				let input = if key_to_repeat.is_mouse_wheel() {
 					INPUT::mouse_down(key_to_repeat, CALL_NEXT_END)
 				} else {
@@ -590,8 +603,8 @@ impl Handler {
 				};
 				h.send_count += 1;
 				h.sender.send(InputMsg::Single(input)).unwrap();
-				true
-			};
+			}
+			return true;
 		}
 		
 		if entry.mods.has_any(mod_bit) { // suppress repeated entry mods (Qmk KeyOverrides issue)
@@ -820,6 +833,136 @@ impl Handler {
 		}
 	}
 	
+	fn handle_hotstr(key: Key, h: &mut Handler) -> bool {
+		if key == Key::SPACE {
+			if h.hotstr_buf.is_empty() || h.v_mods.has_any(Mods::LCAW | Mods::RCAW) {
+				return false;
+			}
+			
+			let Some((hh, entry)) = h.hotstrs.find(&h.hotstr_buf) else {
+				h.hotstr_buf.push_back_on_full(b' ', FullMode::DropOldest);
+				return false;
+			};
+			
+			h.hotstr_buf.clear();
+			
+			let hotstr = match hh() {
+				Ok(res) => res,
+				Err(err) => {
+					display_err(format!("{entry:?}"), err);
+					return false;
+				}
+			};
+			
+			match hotstr {
+				Hotstr::Default => return false,
+				Hotstr::Erase => Self::hotstr_erase(entry.len(), h),
+				Hotstr::Input { r, clear } => todo!("{r}{clear}"),
+				Hotstr::Clipb { r, clear, restore } => {
+					if let Err(err) = Self::hotstr_clipb(r, clear, restore, entry.len(), h) {
+						display_err(format!("Hotstr::Clipb({entry:?})"), err);
+					}
+				}
+				Hotstr::Action(action) => {
+					Self::hotstr_erase(entry.len(), h);
+					thread::spawn(move || {
+						if let Err(err) = action() {
+							display_err(format!("Hotstr::Action({entry:?})"), err);
+						}
+					});
+				},
+			}
+			
+			true
+		} else {
+			let Some(info) = key.info() else {
+				return false;
+			};
+			
+			match info.0 {
+				KeyType::Letter => {
+					if !h.v_mods.has_any(Mods::LCAW | Mods::RCAW) {
+						let alt = h.v_mods.has_any(Mods::LS_RS) ^ h.led.is_capslock_on();
+						let l = if alt { info.2 } else { info.1 };
+						h.hotstr_buf.push_back_on_full(l, FullMode::DropOldest);
+					}
+				},
+				KeyType::Symbol | KeyType::Number => {
+					if !h.v_mods.has_any(Mods::LCAW | Mods::RCAW) {
+						let l = if h.v_mods.has_any(Mods::LS_RS) { info.2 } else { info.1 };
+						h.hotstr_buf.push_back_on_full(l, FullMode::DropOldest);
+					}
+				}
+				KeyType::Navigation => {
+					if h.hotstr_buf.is_empty() {
+						return false;
+					}
+					if key == Key::BS {
+						if h.v_mods.is_none() {
+							h.hotstr_buf.pop_back();
+						} else if h.v_mods.has_any(Mods::LC_RC) {
+							if !h.v_mods.has_any(Mods::LSAW | Mods::RSAW) {
+								h.hotstr_buf.clear();
+							}
+						} else if h.v_mods.has_any(Mods::LS_RS) {
+							if !h.v_mods.has_any(Mods::LAW | Mods::RAW) {
+								h.hotstr_buf.pop_back();
+							}
+						}
+					} else if key != Key::INSERT && key != Key::DEL {
+						h.hotstr_buf.clear();
+					}
+				}
+			}
+			
+			false
+		}
+	}
+	
+	fn hotstr_erase(len: usize, h: &mut Handler) {
+		let mut ib = InputBuilder::with_capacity(len*2);
+		for _ in 0..len {
+			ib = ib.key_down(Key::BS).key_up(Key::BS);
+		}
+		h.send_count += 1;
+		h.sender.send(InputMsg::Many(ib.build())).unwrap();
+	}
+	
+	fn hotstr_clipb(r: Cow<'_, str>, clear: bool, restore: bool, len: usize, h: &mut Handler) -> Result<(), Error> {
+		use crate::{app::clipboard, misc::timer};
+		
+		let prev = if restore {
+			Some(clipboard::get_raw()?)
+		} else {
+			None
+		};
+		
+		let mut ib = InputBuilder::with_capacity(4 + (clear as usize * (len*2)));
+		if clear {
+			for _ in 0..len {
+				ib = ib.key_down(Key::BS).key_up(Key::BS);
+			}
+		}
+		
+		let inputs = ib
+			.key_down(Key::LCTRL)
+			.key_down(Key::V)
+			.key_up(Key::V)
+			.key_up(Key::LCTRL)
+			.build();
+		
+		h.send_count += 1;
+		h.sender.send(InputMsg::Many(inputs)).unwrap();
+		
+		clipboard::set_text(r)?;
+		
+		if let Some(raw) = prev {
+			timer::set_once(200, || Ok(clipboard::set_raw(raw)?))?;
+		}
+		
+		Ok(())
+	}
+	
 	fn map_hotkey(f: fn() -> Result<Hotkey, Error>, entry: KeyMods, h: &mut MutexGuard<'_, Handler>) -> bool {
 		match f() {
 			Ok(hotkey) => match hotkey {
@@ -860,15 +1003,23 @@ impl Handler {
 		}
 	}
 	
-	fn mq_handler(tx: mpsc::Sender<u32>) {
-		let thread_id = unsafe { GetCurrentThreadId() };
-		tx.send(thread_id).unwrap();
-		drop(tx);
-		
+	fn mq_handler(tx: mpsc::SyncSender<usize>) {
 		unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE).unwrap(); }
 		
 		let _keybd = unsafe { Owned::new(SetWindowsHookExW(WH_KEYBOARD_LL, Some(Self::ll_keybd_proc), None, 0).unwrap()) };
 		let _mouse = unsafe { Owned::new(SetWindowsHookExW(WH_MOUSE_LL, Some(Self::ll_mouse_proc), None, 0).unwrap()) };
+		
+		let thread_id = unsafe { GetCurrentThreadId() };
+		let caps = (unsafe { GetKeyState(VK_CAPITAL.0 as i32) } & 1) as u8;
+		let num = (unsafe { GetKeyState(VK_NUMLOCK.0 as i32) } & 1) as u8;
+		let scroll = (unsafe { GetKeyState(VK_SCROLL.0 as i32) } & 1) as u8;
+		
+		let msg = ((thread_id as usize) << 32) | ((scroll << 2) | (num << 1) | caps) as usize;
+		tx.send(msg).unwrap();
+		// Wait until the receiver disconnects, so it has enough time to set the data
+		// and finish the initialization.
+		tx.send(0).unwrap_err();
+		drop(tx);
 		
 		let mut msg = MSG::default();
 		
@@ -986,7 +1137,7 @@ fn mask_remap(should_mask: bool, pr_mods: Mods, mods_up: &mut Mods, mods_down: &
 	}
 }
 
-fn display_err(entry: KeyMods, err: Error) {
+fn display_err(entry: impl fmt::Display, err: Error) {
 	// TODO: display with a window
 	println!("entry({entry}): {err}");
 }
@@ -995,8 +1146,8 @@ fn call_next(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
 	unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
-impl Debug for CurrHotkey {
-	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+impl fmt::Debug for CurrHotkey {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
 			Self::Default(entry) => f.debug_tuple("Default").field(entry).finish(),
 			Self::Remap(entry, remap) => f.debug_tuple("Remap").field(entry).field(remap).finish(),

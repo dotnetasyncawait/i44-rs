@@ -101,10 +101,13 @@ impl Device {
 	}
 	
 	fn write_inner(&self, must_close: &mut bool) -> Result<(), Error> {
-		let h = self.handle.as_ref().unwrap().as_handle();
+		// SAFETY: handle must be checked (and opened if necessary) by the caller.
+		let h = unsafe { self.handle.as_ref().unwrap_unchecked().as_handle() };
 		
 		let mut ol = OVERLAPPED::default();
-		ol.hEvent = self.event.as_ref().unwrap().as_handle();
+		
+		// SAFETY: event is set the first time the device is opened.
+		ol.hEvent = unsafe { self.event.as_ref().unwrap_unchecked().as_handle() };
 		
 		let Err(err) = (unsafe { WriteFile(h, Some(&self.output), None, Some(&mut ol)) }) else {
 			// completed synchronously
@@ -146,10 +149,13 @@ impl Device {
 	}
 	
 	fn read_inner(&mut self, timeout: u32, must_close: &mut bool) -> Result<(), Error> {
-		let h = self.handle.as_ref().unwrap().as_handle();
+		// SAFETY: handle must be checked (and opened if necessary) by the caller.
+		let h = unsafe { self.handle.as_ref().unwrap_unchecked().as_handle() };
 		
 		let mut ol = OVERLAPPED::default();
-		ol.hEvent = self.event.as_ref().unwrap().as_handle();
+		
+		// SAFETY: event is set the first time the device is opened.
+		ol.hEvent = unsafe { self.event.as_ref().unwrap_unchecked().as_handle() };
 		
 		let Err(err) = (unsafe { ReadFile(h, Some(&mut self.input), None, Some(&mut ol)) }) else {
 			// completed synchronously

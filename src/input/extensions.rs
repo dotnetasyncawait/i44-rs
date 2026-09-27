@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use super::keys::Key;
 use windows::Win32::UI::{
 	Input::KeyboardAndMouse::{INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
@@ -79,5 +80,24 @@ fn get_mouse_data(key: u16) -> (MOUSE_EVENT_FLAGS, u32) {
 	
 	fn get_wheel_mult(wheel: u16) -> i32 {
 		(((wheel & 0xF000) >> 12) + 1) as _
+	}
+}
+
+pub enum FullMode {
+	DropOldest,
+}
+
+pub trait VecDequeExt<T> {
+	fn push_back_on_full(&mut self, value: T, full_mode: FullMode);
+}
+
+impl<T> VecDequeExt<T> for VecDeque<T> {
+	fn push_back_on_full(&mut self, value: T, full_mode: FullMode) {
+		if self.len() == self.capacity() {
+			match full_mode {
+				FullMode::DropOldest => _ = self.pop_front(),
+			}
+		}
+		self.push_back(value);
 	}
 }

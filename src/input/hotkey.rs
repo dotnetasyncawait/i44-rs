@@ -17,3 +17,15 @@ impl Hotkey {
 		Ok(self)
 	}
 }
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct HotkeyHandler {
+	pub func: fn() -> Result<Hotkey, Error>,
+	pub exempt: bool,
+}
+
+impl HotkeyHandler {
+	pub fn new(f: fn() -> Result<Hotkey, Error>, exempt: bool) -> Self {
+		Self { func: f, exempt }
+	}
+}

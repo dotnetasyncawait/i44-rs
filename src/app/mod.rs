@@ -3,7 +3,7 @@ pub(super) mod main_win;
 pub mod clipboard;
 
 use super::common::error::{Win32ErrResExt, Error, OK};
-use super::input::{handler::{self, Handler}, hotkey::Hotkey, mods::Mods, keys::Key};
+use super::input::{handler::{self, Handler}, hotkey::Hotkey, mods::Mods, keys::Key, hotstr::Hotstr};
 use tray_icon::{IconBuilder, TrayIcon, IconEvent};
 use main_win::{MainWindow, OnMsgCallback, OnExitCallback, Icon};
 use std::{process, sync::{OnceLock, Mutex}};
@@ -55,12 +55,22 @@ pub fn hwnd() -> HWND {
 
 impl App {
 	pub fn hotkey(mut self, mods: Mods, key: Key, f: fn() -> Result<Hotkey, Error>) -> Self {
-		self.h.as_mut().unwrap().hotkey(mods, key, f);
+		self.h.as_mut().unwrap().hotkey(mods, key, f, false);
 		self
 	}
 	
 	pub fn hotkey_exempt(mut self, mods: Mods, key: Key, f: fn() -> Result<Hotkey, Error>) -> Self {
-		self.h.as_mut().unwrap().hotkey_exempt(mods, key, f);
+		self.h.as_mut().unwrap().hotkey(mods, key, f, true);
+		self
+	}
+	
+	pub fn hotstr(mut self, entry: &str, f: fn() -> Result<Hotstr, Error>) -> Self {
+		self.h.as_mut().unwrap().hotstr(entry, f, false);
+		self
+	}
+	
+	pub fn hotstr_exempt(mut self, entry: &str, f: fn() -> Result<Hotstr, Error>) -> Self {
+		self.h.as_mut().unwrap().hotstr(entry, f, true);
 		self
 	}
 	
