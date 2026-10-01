@@ -6,7 +6,7 @@ use super::{
 	input_builder::InputBuilder,
 	extensions::{InputExt, VecDequeExt, FullMode},
 	constants::{CALL_NEXT, CALL_NEXT_END, CACHED_EVENT}, key_event::{KeyEvent, KeyEventNotifier}};
-use crate::common::error::Error;
+use crate::{common::error::{Error, OK}, misc::threadpool};
 use std::{collections::{HashMap, hash_map::Entry, VecDeque}, ptr, thread::{self, JoinHandle}, fmt, borrow::Cow};
 use std::sync::{mpsc::{self, SyncSender, TrySendError}, Arc, OnceLock, Mutex, MutexGuard, atomic::{AtomicBool, Ordering}};
 use windows::core::Owned;
@@ -424,19 +424,21 @@ impl Handler {
 				// It could be fixed by notifying back from the runner thread (once the action is run to completion),
 				// but it would require adding a new field to the Handler/CurrHotkey::Action, specifically for this case.
 				// Since actions on wheel keys are rare (not any for now), it should not be a problem.
-				thread::spawn(move || {
+				threadpool::queue_job(move || {
 					if let Err(err) = action(event) {
 						display_err(entry, err);
 					}
-				});
+					OK
+				}).expect("failed to queue job");
 				true
 			},
 			Hotkey::ActionRepeat(action) => {
-				thread::spawn(move || {
+				threadpool::queue_job(move || {
 					if let Err(err) = action() {
 						display_err(entry, err);
 					}
-				});
+					OK
+				}).expect("failed to queue job");
 				true
 			},
 		}
@@ -755,11 +757,12 @@ impl Handler {
 		let (notf, event) = KeyEvent::new();
 		h.curr_h = Some(CurrHotkey::Action(entry, notf));
 		
-		thread::spawn(move || {
+		threadpool::queue_job(move || {
 			if let Err(err) = action(event) {
 				display_err(entry, err);
 			}
-		});
+			OK
+		}).expect("failed to queue job");
 		
 		true
 	}
@@ -778,7 +781,7 @@ impl Handler {
 		let (tx, rx) = mpsc::sync_channel(0);
 		h.curr_h = Some(CurrHotkey::ActionRepeat(entry, tx));
 		
-		thread::spawn(move || {
+		threadpool::queue_job(move || {
 			loop {
 				if let Err(err) = action() {
 					display_err(entry, err);
@@ -788,7 +791,8 @@ impl Handler {
 					break;
 				}
 			}
-		});
+			OK
+		}).expect("failed to queue job");
 		
 		true
 	}
@@ -866,11 +870,12 @@ impl Handler {
 				}
 				Hotstr::Action(action) => {
 					Self::hotstr_erase(entry.len(), h);
-					thread::spawn(move || {
+					threadpool::queue_job(move || {
 						if let Err(err) = action() {
 							display_err(format!("Hotstr::Action({entry:?})"), err);
 						}
-					});
+						OK
+					}).expect("failed to queue job");
 				},
 			}
 			

@@ -53,7 +53,7 @@ struct TimerItemResettable {
 pub fn set_once(delay: u32, cb: impl FnOnce() -> Result<(), Error> + Send + 'static) -> Result<(), OsError> {
 	let item = Box::into_raw(Box::new(TimerItem { cb: Box::new(cb) }));
 	
-	match unsafe { CreateThreadpoolTimer(Some(timer_proc_once), Some(item as *mut c_void), None) } {
+	match unsafe { CreateThreadpoolTimer(Some(timer_proc), Some(item as *mut c_void), None) } {
 		Ok(timer) => {
 			unsafe { SetThreadpoolTimer(timer, Some(&get_filetime(delay)), 0, None); }
 			Ok(())
@@ -82,7 +82,7 @@ pub fn set_once_owned(
 	}
 }
 
-unsafe extern "system" fn timer_proc_once(_: PTP_CALLBACK_INSTANCE, ctx: *mut c_void, timer: PTP_TIMER) {
+unsafe extern "system" fn timer_proc(_: PTP_CALLBACK_INSTANCE, ctx: *mut c_void, timer: PTP_TIMER) {
 	let item = unsafe { Box::from_raw(ctx as *mut TimerItem) };
 	
 	if let Err(err) = (item.cb)() {

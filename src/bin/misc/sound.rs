@@ -12,6 +12,10 @@ pub fn init() {
 	AUDIO.set(audio).expect("sound should not be set");
 }
 
-pub fn play_vol<P: AsRef<Path>>(path: P, vol: u8) -> Result<(), PlayError> {
+pub fn play(path: impl AsRef<Path>) -> Result<(), PlayError> {
+	get_audio().play(path)
+}
+
+pub fn play_vol(path: impl AsRef<Path>, vol: u8) -> Result<(), PlayError> {
 	get_audio().play_vol(path, vol)
 }
