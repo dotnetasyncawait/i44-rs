@@ -16,8 +16,7 @@ fn main() {
 	sound::init();
 	mode::init();
 	mic::init();
-	
-	kb::enable().expect("failed to connect to kb");
+	kb::init();
 	
 	app.run();
 }

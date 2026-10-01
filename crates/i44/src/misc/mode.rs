@@ -1,4 +1,5 @@
-use std::{thread, sync::{OnceLock, RwLock}};
+use rhk::hid;
+use std::{thread, sync::{OnceLock, RwLock}, fmt};
 use super::kb::{self, layers::*, hid_msgs::*};
 
 #[derive(Debug, Clone, Copy)]
@@ -54,19 +55,55 @@ pub fn init() {
 fn hid_listener() {
 	let mut d = kb::new_device();
 	
-	// TODO: handle errors (device disconnection, etc) instead of unwrapping,
-	// displaying error info with a window. Fail fast (panic) on opening.
-	d.open().and_then(|_| d.write(&[HID_GET_LAYER])).unwrap();
+	// We panic here because it's still an initialization.
+	d.open()
+		.and_then(|_| d.write(&[HID_GET_LAYER]))
+		.expect("failed to request kb layer");
+	
 	let mut input = [0u8; 3];
 	
 	loop {
-		d.read(&mut input).unwrap();
+		if let Err(err) = d.read(&mut input) {
+			if err.kind() == hid::ErrorKind::DeviceNotConnected {
+				reconnect(&mut d);
+			} else {
+				panic!("failed to read kb: {err}");
+			}
+		}
 		
 		if input[0] == HID_LAYER_UPDATE {
 			let state = (input[1] as u16) << 8 | input[2] as u16;
 			set_state(state);
 		}
 	}
+}
+
+fn reconnect(d: &mut hid::Device) {
+	const FROM: &str = "hid_listener";
+	
+	for _ in 0..10 {
+		display_warn(FROM, "kb got disconnected; attempting to reconnect in 3 secs...");
+		thread::sleep(std::time::Duration::from_secs(3));
+		
+		if let Err(err) = d.open() {
+			display_warn(FROM, err);
+		} else {
+			display_info(FROM, "kb is successfully reconnected");
+			return;
+		}
+	}
+	
+	panic!("failed to reconnect to kb");
+}
+
+fn display_info(from: impl fmt::Display, err: impl fmt::Display) {
+	// TODO: display with a window
+	println!("[INFO] {from}: {err}");
+}
+
+fn display_warn(from: impl fmt::Display, err: impl fmt::Display) {
+	// TODO: display with a window
+	println!("[WARN] {from}: {err}");
 }
 
 fn set_state(layer: u16) {

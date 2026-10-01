@@ -42,6 +42,10 @@ pub fn new_device() -> Device {
 	Device::new(Arc::clone(&DEV_INFO))
 }
 
+pub fn init() {
+	enable().expect("failed to init kb")
+}
+
 pub fn enable() -> HidResult {
 	new_device().write(&[HID_HOST, 1])
 }
