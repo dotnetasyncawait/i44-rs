@@ -1,7 +1,7 @@
-use std::{cell::RefCell, ffi::c_void, sync::{Arc, Mutex, Weak, mpsc}};
+use std::{cell::RefCell, ffi::c_void, sync::{Arc, Mutex, Weak, mpsc}, fmt};
 use std::{thread::{self, JoinHandle}, collections::{HashMap, hash_map::Entry}};
 use super::tray_icon::{TrayIcon, IconBuilder, IconEvent};
-use crate::common::error::OsError;
+use crate::common::error::{Error, OsError};
 use windows::core::w;
 use windows::Win32::{
 	Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
@@ -11,7 +11,7 @@ use windows::Win32::{
 		SetWindowLongPtrW, WM_NCCREATE, WM_USER, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_RBUTTONDOWN,
 		WM_CLOSE, WM_DESTROY, WM_ENDSESSION, PostMessageW, PostQuitMessage, DestroyWindow}};
 
-pub type OnMsgCallback = fn(HWND, u32, WPARAM, LPARAM) -> Option<isize>;
+pub type OnMsgCallback = fn(HWND, u32, WPARAM, LPARAM) -> Result<Option<isize>, Error>;
 pub type OnExitCallback = fn() -> bool;
 
 const WM_ICON_MSG: u32 = WM_USER | 0xFF;
@@ -174,7 +174,7 @@ unsafe extern "system" fn win_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 			drop(exit_cbs);
 			_ = unsafe { Arc::from_raw(r_state) };
 			unsafe { DestroyWindow(hwnd).unwrap() };
-		},
+		}
 		WM_DESTROY => unsafe { PostQuitMessage(0); },
 		WM_ENDSESSION if wparam.0 == 1 => {
 			let exit_cbs = state.on_exit_cbs.lock().unwrap();
@@ -183,7 +183,7 @@ unsafe extern "system" fn win_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 					break;
 				}
 			}
-		},
+		}
 		WM_ICON_MSG => {
 			let event = match lparam.0 as u32 {
 				WM_LBUTTONDOWN => IconEvent::LClick,
@@ -196,18 +196,19 @@ unsafe extern "system" fn win_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 			let icon_id = wparam.0 as u32;
 			
 			if let Some(icon) = icons.get(&icon_id)
-				&& let Some(f) = icon.handler
-				&& let Err(err) = f(icon, event)
+				&& let Some(cb) = icon.handler
+				&& let Err(err) = cb(icon, event)
 			{
-				println!("From icon handler: {err:?}; (id: {icon_id})"); // TODO: display with window
+				display_err(format!("icon_handler({icon_id})"), err);
 			}
-		},
+		}
 		_ => {
 			let msg_cbs_map = state.on_msg_cbs.lock().unwrap();
 			if let Some(msg_cbs) = msg_cbs_map.get(&msg) {
-				for f in msg_cbs {
-					if let Some(res) = f(hwnd, msg, wparam, lparam) {
-						return LRESULT(res);
+				for (i, cb) in msg_cbs.into_iter().enumerate() {
+					match cb(hwnd, msg, wparam, lparam) {
+						Ok(res) => if let Some(value) = res { return LRESULT(value); }
+						Err(err) => display_err(format!("on_message([{}] 0x{msg:X})", i+1), err)
 					}
 				}
 			}
@@ -270,4 +271,9 @@ impl Drop for Icon {
 			state.icons.lock().unwrap().remove(&self.id).expect("Icon must be present");
 		}
 	}
+}
+
+fn display_err(from: impl fmt::Display, err: impl fmt::Display) {
+	// TODO: display with a window
+	println!("{from}: {err}");
 }

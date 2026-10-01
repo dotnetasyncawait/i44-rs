@@ -43,7 +43,7 @@ impl From<OsError> for WinDragError {
 /// - [ErrorKind::Os]: system error
 pub fn name() -> Result<String, Error> {
 	let hwnd = unsafe { GetForegroundWindow() };
-	inner(hwnd, ErrorKind::NotFound, || title_inner(hwnd))
+	inner(hwnd, ErrorKind::NotFound, || name_inner(hwnd))
 }
 
 /// Returns name of a specified window.

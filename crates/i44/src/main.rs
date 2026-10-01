@@ -1,7 +1,7 @@
 mod misc;
 mod system;
 
-use rhk::{apps::explorer};
+use rhk::{common::error::Error};
 use misc::{hotkeys::AppExt, mode, kb::{self, hid_msgs::HID_DEFAULT}, mic, sound};
 use windows::Win32::{
 	Foundation::{HWND, LPARAM, WPARAM},
@@ -16,21 +16,18 @@ fn main() {
 	sound::init();
 	mode::init();
 	mic::init();
-	explorer::init();
 	
 	kb::enable().expect("failed to connect to kb");
 	
 	app.run();
 }
 
-// TODO: return Result<Option<isize>, Error>
-fn default_kb(_: HWND, _: u32, wparam: WPARAM, _: LPARAM) -> Option<isize> {
+fn default_kb(_: HWND, _: u32, wparam: WPARAM, _: LPARAM) -> Result<Option<isize>, Error> {
 	if wparam.0 as u32 == PBT_APMRESUMEAUTOMATIC {
 		let mut kb = kb::new_device();
 		kb.open()
 			.and_then(|_| kb.write(&[]))
-			.and_then(|_| kb.write(&[HID_DEFAULT]))
-			.expect("failed to default kb");
+			.and_then(|_| kb.write(&[HID_DEFAULT]))?;
 	}
-	None
+	Ok(None)
 }

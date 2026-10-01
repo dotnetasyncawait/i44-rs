@@ -44,6 +44,8 @@ pub fn new() -> App {
 	
 	WIN.set(win).expect("WIN should not be set");
 	
+	crate::apps::explorer::init();
+	
 	App { h: Some(Handler::new()) }
 }
 
@@ -187,7 +189,7 @@ fn set_panic_hook() {
 
 fn ensure_singleton() {
 	unsafe {
-		let _mutex = CreateMutexW(None, false, w!("Global\\i44_mtx")).expect("failed to create a named mutex");
+		let _mutex = CreateMutexW(None, false, w!("Global\\rhk_mtx")).expect("failed to create a named mutex");
 		if GetLastError() == ERROR_ALREADY_EXISTS {
 			_ = MessageBoxW(None, w!("Application is already running"), w!("Error"), MB_ICONERROR);
 			process::exit(0)
