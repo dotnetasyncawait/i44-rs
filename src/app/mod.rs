@@ -44,8 +44,6 @@ pub fn new() -> App {
 	
 	WIN.set(win).expect("WIN should not be set");
 	
-	crate::misc::timer::init();
-	
 	App { h: Some(Handler::new()) }
 }
 

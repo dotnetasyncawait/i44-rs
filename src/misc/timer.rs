@@ -1,68 +1,113 @@
-use crate::common::error::{Error, OsError, Win32ErrExt, Win32ErrResExt};
-use std::{ffi::c_void, sync::OnceLock, fmt};
+use crate::common::error::{Error, OsError};
+use std::{ffi::c_void, fmt};
 use windows::Win32::{
-	Foundation::{HANDLE, ERROR_IO_PENDING},
-	System::Threading::{CreateTimerQueue, CreateTimerQueueTimer, DeleteTimerQueueTimer, WT_EXECUTEONLYONCE},
+	Foundation::FILETIME,
+	System::Threading::{CloseThreadpoolTimer, CreateThreadpoolTimer, IsThreadpoolTimerSet, PTP_CALLBACK_INSTANCE,
+		PTP_TIMER, SetThreadpoolTimer, WaitForThreadpoolTimerCallbacks},
 };
 
-static QUEUE: OnceLock<usize> = OnceLock::new();
-
-pub(crate) fn init() {
-	let queue = unsafe { CreateTimerQueue().expect("failed to create timer queue") };
-	QUEUE.set(queue.0 as usize).expect("timer::init() should only be called once");
+pub struct TimerGuard {
+	timer: PTP_TIMER,
+	item: *mut TimerItemResettable,
 }
 
-#[repr(C)]
-struct TimerItem {
-	timer: HANDLE,
-	cb: Box<dyn FnOnce() -> Result<(), Error>>,
-}
-
-pub fn set_once(delay: u32, cb: impl FnOnce() -> Result<(), Error> + 'static) -> Result<(), OsError> {
-	let item = TimerItem { timer: HANDLE::default(), cb: Box::new(cb) };
-	let item = Box::into_raw(Box::new(item));
+impl TimerGuard {
+	pub fn reset(&self, delay: u32) {
+		unsafe { SetThreadpoolTimer(self.timer, Some(&get_filetime(delay)), 0, None); }
+	}
 	
-	if let Err(err) = unsafe { CreateTimerQueueTimer(
-		item as *mut HANDLE,
-		Some(get_queue()),
-		Some(timer_proc),
-		Some(item as *const c_void),
-		delay,
-		0,
-		WT_EXECUTEONLYONCE).context("failed to create queue-timer") }
-	{
-		let _ = unsafe { Box::from_raw(item) };
-		Err(err)
-	} else {
-		Ok(())
+	pub fn is_set(&self) -> bool {
+		unsafe { IsThreadpoolTimerSet(self.timer).as_bool() }
+	}
+	
+	pub fn cancel(&self) {
+		unsafe { SetThreadpoolTimer(self.timer, None, 0, None); }
+		unsafe { WaitForThreadpoolTimerCallbacks(self.timer, true); }
 	}
 }
 
-unsafe extern "system" fn timer_proc(ptr: *mut c_void, _: bool) {
-	let item = unsafe { Box::from_raw(ptr as *mut TimerItem) };
+impl Drop for TimerGuard {
+	fn drop(&mut self) {
+		unsafe {
+			SetThreadpoolTimer(self.timer, None, 0, None);
+			WaitForThreadpoolTimerCallbacks(self.timer, true);
+			CloseThreadpoolTimer(self.timer);
+			
+			// SAFETY: Timer is fully disposed, we can free the item now.
+			_ = Box::from_raw(self.item);
+		}
+	}
+}
+
+unsafe impl Send for TimerGuard {}
+unsafe impl Sync for TimerGuard {}
+
+struct TimerItem {
+	cb: Box<dyn FnOnce() -> Result<(), Error>>,
+}
+
+struct TimerItemResettable {
+	cb: Box<dyn FnMut() -> Result<(), Error>>,
+}
+
+pub fn set_once(delay: u32, cb: impl FnOnce() -> Result<(), Error> + Send + 'static) -> Result<(), OsError> {
+	let item = Box::into_raw(Box::new(TimerItem { cb: Box::new(cb) }));
+	
+	match unsafe { CreateThreadpoolTimer(Some(timer_proc_once), Some(item as *mut c_void), None) } {
+		Ok(timer) => {
+			unsafe { SetThreadpoolTimer(timer, Some(&get_filetime(delay)), 0, None); }
+			Ok(())
+		}
+		Err(err) => {
+			unsafe { _ = Box::from_raw(item); }
+			Err(OsError::new("failed to create timer", err))
+		}
+	}
+}
+
+pub fn set_once_owned(
+	delay: u32, cb: impl FnMut() -> Result<(), Error> + Send + 'static) -> Result<TimerGuard, OsError>
+{
+	let item = Box::into_raw(Box::new(TimerItemResettable { cb: Box::new(cb) }));
+	
+	match unsafe { CreateThreadpoolTimer(Some(timer_proc_resettable), Some(item as *mut c_void), None) } {
+		Ok(timer) => {
+			unsafe { SetThreadpoolTimer(timer, Some(&get_filetime(delay)), 0, None); }
+			Ok(TimerGuard { timer, item })
+		}
+		Err(err) => {
+			unsafe { _ = Box::from_raw(item); }
+			Err(OsError::new("failed to create timer", err))
+		}
+	}
+}
+
+unsafe extern "system" fn timer_proc_once(_: PTP_CALLBACK_INSTANCE, ctx: *mut c_void, timer: PTP_TIMER) {
+	let item = unsafe { Box::from_raw(ctx as *mut TimerItem) };
 	
 	if let Err(err) = (item.cb)() {
 		display_err("timer_proc", err);
 	}
 	
-	let timer = item.timer;
+	unsafe { CloseThreadpoolTimer(timer); }
+}
+
+unsafe extern "system" fn timer_proc_resettable(_: PTP_CALLBACK_INSTANCE, ctx: *mut c_void, _: PTP_TIMER) {
+	// SAFETY: We never access this struct from outside until the timer is fully disposed,
+	// ie, it's unset, pending callbacks are awaited, and itself is closed.
+	let item = unsafe { &mut *(ctx as *mut TimerItemResettable) };
 	
-	// If the 'CompletionEvent' parameter is passed as NULL (None), the function marks the timer
-	// for deletion and returns immediately. If the timer's procedure (us) is still running (which is),
-	// it returns ERROR_IO_PENDING. Docs also say that it is not necessary to call this function again.
-	// This approach should, technically, work without even needing a dedicated thread for timer deletion.
-	if let Err(err) = unsafe {
-		DeleteTimerQueueTimer(Some(get_queue()), timer, None) } && err.as_win32() != ERROR_IO_PENDING
-	{
-		panic!("failed to delete the timer ({timer:?}): {err}", );
+	if let Err(err) = (item.cb)() {
+		display_err("timer_proc_resettable", err);
 	}
 }
 
-fn get_queue() -> HANDLE {
-	HANDLE(*QUEUE.get().unwrap() as *mut c_void)
+fn get_filetime(delay: u32) -> FILETIME {
+	let duetime = -((delay as i64) * 10_000) as u64;
+	FILETIME { dwLowDateTime: duetime as u32, dwHighDateTime: (duetime >> 32) as u32 }
 }
 
 fn display_err(from: &str, err: impl fmt::Display) {
-	// TODO: dispaly with a window
+	// TODO: display with a window
 	println!("{from}: {err}");
 }

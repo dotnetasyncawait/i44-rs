@@ -30,9 +30,14 @@ impl KeyEvent {
 			}
 		}
 	}
+	
+	pub fn wait(&self) -> bool {
+		let _ = self.rx.recv();
+		true
+	}
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct KeyEventNotifier {
 	tx: Sender<()>
 }
@@ -40,11 +45,5 @@ pub(super) struct KeyEventNotifier {
 impl KeyEventNotifier {
 	pub fn notify(self) {
 		let _ = self.tx.send(());
-	}
-}
-
-impl Clone for KeyEventNotifier {
-	fn clone(&self) -> Self {
-		Self { tx: self.tx.clone() }
 	}
 }

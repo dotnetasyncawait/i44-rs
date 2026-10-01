@@ -2,7 +2,7 @@
 
 use crate::common::error::{OsError, Win32ErrResExt, tagged_error};
 use std::{ffi::c_void, fmt, io};
-use std::{collections::HashMap, fs, io::Read, mem, path::{Path, PathBuf}, sync::{Arc, Mutex, mpsc}, thread};
+use std::{collections::HashMap, fs, io::Read, mem, path::Path, sync::{Arc, Mutex, mpsc}, thread};
 use windows_core::{HRESULT, Interface};
 use windows::Win32::Media::Audio::{
 	AudioCategory_GameEffects, WAVEFORMATEX,
@@ -12,7 +12,7 @@ use windows::Win32::Media::Audio::{
 
 tagged_error!(
 	PlayError,
-	PlayErrorKind { UnsupportedFormat, Io, Os }
+	PlayErrorKind { UnsupportedFormat, NotFound, Io, Os }
 );
 
 impl From<io::Error> for PlayError {
@@ -29,7 +29,7 @@ impl From<OsError> for PlayError {
 
 pub struct XAudio2 {
 	audio: IXAudio2,
-	cache: Mutex<HashMap<PathBuf, Arc<Chunks>>>,
+	cache: Mutex<HashMap<Box<Path>, Arc<Chunks>>>,
 	cb: ScopedVoiceCallback,
 }
 
@@ -76,7 +76,7 @@ impl XAudio2 {
 			None => {
 				drop(cache);
 				let ch = Arc::new(parse(&path)?);
-				let key = key.to_path_buf();
+				let key = Box::from(key);
 				cache = self.cache.lock().unwrap();
 				_ = cache.insert(key, Arc::clone(&ch));
 				ch
@@ -136,7 +136,11 @@ unsafe fn xaudio2_create(audio2: *mut Option<IXAudio2>, flags: u32, processor: u
 }
 
 fn parse<P: AsRef<Path>>(path: P) -> Result<Chunks, PlayError> {
-	let mut file = fs::File::open(&path)?;
+	let mut file = fs::File::open(&path).map_err(|err| match err.kind() {
+		io::ErrorKind::NotFound => PlayError::new_simple(PlayErrorKind::NotFound),
+		_ => err.into()
+	})?;
+	
 	let t_size = file.metadata()?.len();
 	
 	// https://learn.microsoft.com/en-us/windows/win32/xaudio2/resource-interchange-file-format--riff-

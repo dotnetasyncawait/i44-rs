@@ -171,24 +171,24 @@ fn get_raw_inner() -> Result<RawData, OsError> {
 	let mut offset = 0;
 	
 	for (fmt, size, g_mem) in items {
-		unsafe { (ptr.offset(offset) as *mut u32).write(fmt); }
+		unsafe { (ptr.add(offset) as *mut u32).write(fmt); }
 		offset += 4;
-		unsafe { (ptr.offset(offset) as *mut u32).write(size); }
+		unsafe { (ptr.add(offset) as *mut u32).write(size); }
 		offset += 4;
 		
 		let l_mem = unsafe { GlobalLock(g_mem) as *const u8 };
 		if l_mem.is_null() {
 			return Err(OsError::from_thread("failed to lock mem"));
 		}
-		unsafe { ptr::copy_nonoverlapping(l_mem, ptr.offset(offset), size as usize) };
-		offset += size as isize;
+		unsafe { ptr::copy_nonoverlapping(l_mem, ptr.add(offset), size as usize) };
+		offset += size as usize;
 		
 		if let Err(err) = unsafe { GlobalUnlock(g_mem) } && err.code() != HR_NO_ERROR {
 			return Err(OsError::new("failed to unlock mem", err));
 		}
 	}
 	
-	unsafe { (ptr.offset((data.len()-4) as isize) as *mut u32).write(0) };
+	unsafe { (ptr.add(data.len()-4) as *mut u32).write(0) };
 	Ok(RawData { data: unsafe { data.assume_init() } })
 }
 

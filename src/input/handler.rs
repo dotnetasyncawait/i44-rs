@@ -849,8 +849,9 @@ impl Handler {
 			let hotstr = match hh() {
 				Ok(res) => res,
 				Err(err) => {
+					Self::hotstr_erase(entry.len(), h);
 					display_err(format!("{entry:?}"), err);
-					return false;
+					return true;
 				}
 			};
 			
