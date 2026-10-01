@@ -1,8 +1,8 @@
-use i44::input::{hotkey::Hotkey::{self, *}, mods::Mods, keys::Key};
-use i44::common::error::{Error, OK};
-use i44::misc::win;
-use i44::apps::*;
-use i44::App;
+use rhk::input::{hotkey::Hotkey::{self, *}, mods::Mods, keys::Key};
+use rhk::common::error::{Error, OK};
+use rhk::misc::win;
+use rhk::apps::*;
+use rhk::App;
 use super::{mode::{Mode, ModeState}, kb, mic};
 use crate::system::paths;
 
@@ -812,7 +812,7 @@ fn f23() -> HotkeyResult {
 }
 
 fn suspend() -> HotkeyResult {
-	if i44::suspend_tgl() {
+	if rhk::suspend_tgl() {
 		Mode::set_none();
 		kb::disable()?;
 	} else {
@@ -823,6 +823,6 @@ fn suspend() -> HotkeyResult {
 }
 
 fn exit() -> HotkeyResult {
-	i44::exit();
+	rhk::exit();
 	Ok(Suppress)
 }

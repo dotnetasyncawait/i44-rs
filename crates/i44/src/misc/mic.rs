@@ -1,6 +1,6 @@
 use std::{env, sync::{OnceLock, atomic::{AtomicBool, Ordering}}, process::Command, path::PathBuf};
-use i44::misc::audio::{self, Device, DeviceType, VolumeNotfEvent};
-use i44::{common::error::{Error, OsError, OK}, tray_icon::{Icon, TrayIcon, IconEvent}};
+use rhk::misc::audio::{self, Device, DeviceType, VolumeNotfEvent};
+use rhk::{common::error::{Error, OsError, OK}, tray_icon::{Icon, TrayIcon, IconEvent}};
 use super::sound;
 
 static MIC: OnceLock<Device> = OnceLock::new();
@@ -23,7 +23,7 @@ pub fn init() {
 	let mut dir = env::current_dir().expect("failed to get current dir");
 	dir.push("media");
 	
-	let icon = i44::icon_builder()
+	let icon = rhk::icon_builder()
 		.add("FIFINE K670", dir.join("greenMic.ico")).expect("failed to add green icon")
 		.add("FIFINE K670 (muted)", dir.join("redMic.ico")).expect("failed to add red icon")
 		.handler(icon_handler)
@@ -34,7 +34,7 @@ pub fn init() {
 	icon.display(muted as _).expect("failed to display icon");
 	
 	MUTED.store(muted, Ordering::Relaxed);
-	ICON.set(i44::add_icon(icon)).expect("ICON should not be set");
+	ICON.set(rhk::add_icon(icon)).expect("ICON should not be set");
 	
 	mic.on_volume_update(volume_handler).expect("failed to add volume handler");
 	MIC.set(mic).expect("MIC should not be set");

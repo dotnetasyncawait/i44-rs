@@ -1,14 +1,14 @@
 mod misc;
 mod system;
 
-use i44::{apps::explorer};
+use rhk::{apps::explorer};
 use misc::{hotkeys::AppExt, mode, kb::{self, hid_msgs::HID_DEFAULT}, mic, sound};
 use windows::Win32::{
 	Foundation::{HWND, LPARAM, WPARAM},
 	UI::WindowsAndMessaging::{PBT_APMRESUMEAUTOMATIC, WM_POWERBROADCAST}};
 
 fn main() {
-	let app = i44::new()
+	let app = rhk::new()
 		.add_hotkeys()
 		.on_message(WM_POWERBROADCAST, default_kb)
 		.on_exit(|| { _ = kb::disable(); false });

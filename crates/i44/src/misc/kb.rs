@@ -1,5 +1,5 @@
 use std::sync::{Arc, LazyLock};
-use i44::hid::{self, DeviceInfo, Device, Error};
+use rhk::hid::{self, DeviceInfo, Device, Error};
 use hid_msgs::*;
 use layers::*;
 

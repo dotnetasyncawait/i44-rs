@@ -1,5 +1,5 @@
 use std::{path::Path, sync::OnceLock};
-use i44::misc::xaudio2::{XAudio2, PlayError};
+use rhk::misc::xaudio2::{XAudio2, PlayError};
 
 static AUDIO: OnceLock<XAudio2> = OnceLock::new();
 
@@ -12,6 +12,7 @@ pub fn init() {
 	AUDIO.set(audio).expect("sound should not be set");
 }
 
+#[allow(dead_code)]
 pub fn play(path: impl AsRef<Path>) -> Result<(), PlayError> {
 	get_audio().play(path)
 }
