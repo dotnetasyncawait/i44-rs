@@ -2,7 +2,7 @@ mod misc;
 mod system;
 
 use rhk::{common::error::Error};
-use misc::{hotkeys::AppExt, mode, kb::{self, hid_msgs::HID_DEFAULT}, mic, sound};
+use misc::{hotkeys::AppExt, hotstrs::AppExt as _, mode, mic, sound, kb::{self, hid_msgs::HID_DEFAULT}};
 use windows::Win32::{
 	Foundation::{HWND, LPARAM, WPARAM},
 	UI::WindowsAndMessaging::{PBT_APMRESUMEAUTOMATIC, WM_POWERBROADCAST}};
@@ -10,6 +10,7 @@ use windows::Win32::{
 fn main() {
 	let app = rhk::new()
 		.add_hotkeys()
+		.add_hotstrs()
 		.on_message(WM_POWERBROADCAST, default_kb)
 		.on_exit(|| { _ = kb::disable(); false });
 	

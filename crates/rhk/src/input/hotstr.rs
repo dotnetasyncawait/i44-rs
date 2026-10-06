@@ -12,21 +12,21 @@ pub enum Hotstr {
 }
 
 impl Hotstr {
-	pub fn input(r: &'static InputKeys) -> Self {
-		Self::Input { r, clear: true }
-	}
-	
-	pub fn clipb(r: impl Into<Cow<'static, str>>) -> Self {
-		Self::Clipb { r: r.into(), clear: true, restore: true }
-	}
-	
-	pub fn clipb_no_restore(r: impl Into<Cow<'static, str>>) -> Self {
-		Self::Clipb { r: r.into(), clear: true, restore: false }
-	}
-	
 	pub fn ok(self) -> Result<Self, Error> {
 		Ok(self)
 	}
+}
+
+pub fn input(r: &'static InputKeys) -> Hotstr {
+	Hotstr::Input { r, clear: true }
+}
+
+pub fn clipb(r: impl Into<Cow<'static, str>>) -> Hotstr {
+	Hotstr::Clipb { r: r.into(), clear: true, restore: true }
+}
+
+pub fn clipb_no_restore(r: impl Into<Cow<'static, str>>) -> Hotstr {
+	Hotstr::Clipb { r: r.into(), clear: true, restore: false }
 }
 
 #[derive(Debug)]
