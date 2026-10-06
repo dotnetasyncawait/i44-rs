@@ -1,7 +1,7 @@
 use super::{
 	hotkey::{Hotkey, HotkeyHandler},
 	hotstr::{Hotstr, HotstrTrie},
-	mods::Mods,
+	mods::Mods, InputKey,
 	keys::{Key, KeyType, Led},
 	input_builder::InputBuilder,
 	extensions::{InputExt, VecDequeExt, FullMode},
@@ -425,21 +425,21 @@ fn ms_wheel(key: Key, h: &mut Handler) -> bool {
 			// It could be fixed by notifying back from the runner thread (once the action is run to completion),
 			// but it would require adding a new field to the Handler/CurrHotkey::Action, specifically for this case.
 			// Since actions on wheel keys are rare (not any for now), it should not be a problem.
-			threadpool::queue_job(move || {
+			queue_job(move || {
 				if let Err(err) = action(event) {
 					display_err(entry, err);
 				}
 				OK
-			}).expect("failed to queue job");
+			});
 			true
 		},
 		Hotkey::ActionRepeat(action) => {
-			threadpool::queue_job(move || {
+			queue_job(move || {
 				if let Err(err) = action() {
 					display_err(entry, err);
 				}
 				OK
-			}).expect("failed to queue job");
+			});
 			true
 		},
 	}
@@ -756,12 +756,12 @@ fn kb_action(entry: KeyMods, action: fn(KeyEvent) -> Result<(), Error>, h: &mut 
 	let (notf, event) = KeyEvent::new();
 	h.curr_h = Some(CurrHotkey::Action(entry, notf));
 	
-	threadpool::queue_job(move || {
+	queue_job(move || {
 		if let Err(err) = action(event) {
 			display_err(entry, err);
 		}
 		OK
-	}).expect("failed to queue job");
+	});
 	
 	true
 }
@@ -778,7 +778,7 @@ fn kb_action_r(entry: KeyMods, action: fn() -> Result<(), Error>, h: &mut Handle
 	let (tx, rx) = mpsc::sync_channel(0);
 	h.curr_h = Some(CurrHotkey::ActionRepeat(entry, tx));
 	
-	threadpool::queue_job(move || {
+	queue_job(move || {
 		loop {
 			if let Err(err) = action() {
 				display_err(entry, err);
@@ -789,7 +789,7 @@ fn kb_action_r(entry: KeyMods, action: fn() -> Result<(), Error>, h: &mut Handle
 			}
 		}
 		OK
-	}).expect("failed to queue job");
+	});
 	
 	true
 }
@@ -844,11 +844,12 @@ fn handle_hotstr(key: Key, h: &mut Handler) -> bool {
 		};
 		
 		h.hotstr_buf.clear();
+		let entry_len = entry.len();
 		
 		let hotstr = match hh() {
 			Ok(res) => res,
 			Err(err) => {
-				hotstr_erase(entry.len(), h);
+				hotstr_erase(entry_len, h);
 				display_err(format!("{entry:?}"), err);
 				return true;
 			}
@@ -856,21 +857,39 @@ fn handle_hotstr(key: Key, h: &mut Handler) -> bool {
 		
 		match hotstr {
 			Hotstr::Default => return false,
-			Hotstr::Erase => hotstr_erase(entry.len(), h),
-			Hotstr::Input { r, clear } => todo!("{r}{clear}"),
+			Hotstr::Erase => hotstr_erase(entry_len, h),
+			Hotstr::Input { r, clear } => {
+				let mut ib = InputBuilder::with_capacity((clear as usize * (2*entry_len)) + r.1);
+				
+				if clear {
+					ib = ib.key_tap(Key::BS, entry_len as u16);
+				}
+				
+				for key in r.0.iter().copied() {
+					match key {
+						InputKey::Unicode(high, low) => ib = ib.add_char(high, low),
+						InputKey::Down(sc) => ib = ib.key_down(Key(sc)),
+						InputKey::Up(sc) => ib = ib.key_up(Key(sc)),
+						InputKey::Tap(sc, times) => ib = ib.key_tap(Key(sc), times),
+					}
+				}
+				
+				h.send_count += 1;
+				h.sender.send(InputMsg::Many(ib.build())).unwrap();
+			}
 			Hotstr::Clipb { r, clear, restore } => {
-				if let Err(err) = hotstr_clipb(r, clear, restore, entry.len(), h) {
+				if let Err(err) = hotstr_clipb(r, clear, restore, entry_len, h) {
 					display_err(format!("Hotstr::Clipb({entry:?})"), err);
 				}
 			}
 			Hotstr::Action(action) => {
-				hotstr_erase(entry.len(), h);
-				threadpool::queue_job(move || {
+				hotstr_erase(entry_len, h);
+				queue_job(move || {
 					if let Err(err) = action() {
 						display_err(format!("Hotstr::Action({entry:?})"), err);
 					}
 					OK
-				}).expect("failed to queue job");
+				});
 			},
 		}
 		
@@ -887,7 +906,7 @@ fn handle_hotstr(key: Key, h: &mut Handler) -> bool {
 					let l = if alt { info.2 } else { info.1 };
 					h.hotstr_buf.push_back_on_full(l, FullMode::DropOldest);
 				}
-			},
+			}
 			KeyType::Symbol | KeyType::Number => {
 				if !h.v_mods.has_any(Mods::LCAW | Mods::RCAW) {
 					let l = if h.v_mods.has_any(Mods::LS_RS) { info.2 } else { info.1 };
@@ -920,16 +939,16 @@ fn handle_hotstr(key: Key, h: &mut Handler) -> bool {
 	}
 }
 
-fn hotstr_erase(len: usize, h: &mut Handler) {
-	let mut ib = InputBuilder::with_capacity(len*2);
-	for _ in 0..len {
-		ib = ib.key_down(Key::BS).key_up(Key::BS);
-	}
+fn hotstr_erase(entry_len: usize, h: &mut Handler) {
+	let inputs = InputBuilder::with_capacity(entry_len*2)
+		.key_tap(Key::BS, entry_len as u16)
+		.build();
+	
 	h.send_count += 1;
-	h.sender.send(InputMsg::Many(ib.build())).unwrap();
+	h.sender.send(InputMsg::Many(inputs)).unwrap();
 }
 
-fn hotstr_clipb(r: Cow<'_, str>, clear: bool, restore: bool, len: usize, h: &mut Handler) -> Result<(), Error> {
+fn hotstr_clipb(r: Cow<'_, str>, clear: bool, restore: bool, entry_len: usize, h: &mut Handler) -> Result<(), Error> {
 	use crate::{app::clipboard, misc::timer};
 	
 	let prev = if restore {
@@ -938,11 +957,9 @@ fn hotstr_clipb(r: Cow<'_, str>, clear: bool, restore: bool, len: usize, h: &mut
 		None
 	};
 	
-	let mut ib = InputBuilder::with_capacity(4 + (clear as usize * (len*2)));
+	let mut ib = InputBuilder::with_capacity(4 + (clear as usize * (entry_len*2)));
 	if clear {
-		for _ in 0..len {
-			ib = ib.key_down(Key::BS).key_up(Key::BS);
-		}
+		ib = ib.key_tap(Key::BS, entry_len as u16);
 	}
 	
 	let inputs = ib
@@ -1140,6 +1157,10 @@ fn mask_remap(should_mask: bool, pr_mods: Mods, mods_up: &mut Mods, mods_down: &
 fn display_err(entry: impl fmt::Display, err: Error) {
 	// TODO: display with a window
 	println!("entry({entry}): {err}");
+}
+
+fn queue_job(job: impl FnOnce() -> Result<(), Error> + Send + 'static) {
+	threadpool::queue_job(job).expect("failed to queue job")
 }
 
 fn call_next(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {

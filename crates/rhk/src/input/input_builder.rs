@@ -74,6 +74,21 @@ impl InputBuilder {
 		if cond { self.key_up(key) } else { self }
 	}
 	
+	pub fn key_tap(mut self, key: Key, times: u16) -> Self {
+		let (down, up) = if key.is_mouse_key() {
+			(INPUT::mouse_down(key, CALL_NEXT), INPUT::mouse_up(key, CALL_NEXT))
+		} else {
+			(INPUT::keybd_down(key, CALL_NEXT), INPUT::keybd_up(key, CALL_NEXT))
+		};
+		
+		for _ in 0..times {
+			self.buf.push(down);
+			self.buf.push(up);
+		}
+		
+		self
+	}
+	
 	pub fn mods_down(mut self, mods: Mods) -> Self {
 		if !mods.is_none() {
 			self.add_mods(mods, true);
@@ -127,6 +142,19 @@ impl InputBuilder {
 			if mods.has(Mods::RC) { self.buf.push(INPUT::new_keybd(Key::RCTRL.0,  f_ex, CALL_NEXT)) };
 			if mods.has(Mods::LC) { self.buf.push(INPUT::new_keybd(Key::LCTRL.0,  f,    CALL_NEXT)) };
 		}
+	}
+	
+	pub fn add_char(mut self, high: u16, low: u16) -> Self {
+		if low == 0 {
+			self.buf.push(INPUT::new_keybd(high, KEYEVENTF_UNICODE, CALL_NEXT));
+			self.buf.push(INPUT::new_keybd(high, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, CALL_NEXT));
+		} else {
+			self.buf.push(INPUT::new_keybd(high, KEYEVENTF_UNICODE, CALL_NEXT));
+			self.buf.push(INPUT::new_keybd(low,  KEYEVENTF_UNICODE, CALL_NEXT));
+			self.buf.push(INPUT::new_keybd(high, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, CALL_NEXT));
+			self.buf.push(INPUT::new_keybd(low,  KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, CALL_NEXT));
+		}
+		self
 	}
 	
 	pub fn build(mut self) -> Vec<INPUT> {

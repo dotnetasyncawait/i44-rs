@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = [ "crates/i44", "crates/rhk" ]
+members = [ "crates/i44", "crates/rhk", "crates/macros", ]
 
 [profile.release]
 panic = "abort"

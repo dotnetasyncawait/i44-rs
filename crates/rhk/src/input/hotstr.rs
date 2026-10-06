@@ -1,18 +1,19 @@
-use std::{collections::{HashMap, VecDeque, hash_map::Entry}, sync::Arc};
+use std::{collections::{HashMap, VecDeque}, sync::Arc};
 use crate::common::error::Error;
 use std::borrow::Cow;
+use super::InputKeys;
 
 pub enum Hotstr {
 	Default,
 	Erase,
-	Input { r: Cow<'static, str>, clear: bool },
+	Input { r: &'static InputKeys, clear: bool },
 	Clipb { r: Cow<'static, str>, clear: bool, restore: bool },
 	Action(fn() -> Result<(), Error>),
 }
 
 impl Hotstr {
-	pub fn input(r: impl Into<Cow<'static, str>>) -> Self {
-		Self::Input { r: r.into(), clear: true }
+	pub fn input(r: &'static InputKeys) -> Self {
+		Self::Input { r, clear: true }
 	}
 	
 	pub fn clipb(r: impl Into<Cow<'static, str>>) -> Self {
@@ -42,10 +43,7 @@ impl HotstrTrie {
 		let mut node = &mut self.root;
 		
 		for b in entry.bytes().rev() {
-			node = match node.children.entry(b) {
-				Entry::Occupied(e) => e.into_mut(),
-				Entry::Vacant(e) => e.insert(TrieNode::new()),
-			}
+			node = node.children.entry(b).or_insert_with(|| TrieNode::new());
 		}
 		
 		if node.is_word {

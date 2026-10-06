@@ -35,3 +35,4 @@ features = [
 windows-core = "0.62.0"
 regex = "1.13.1"
 pastey = "0.2.3"
+macros = { path = "../macros" }
