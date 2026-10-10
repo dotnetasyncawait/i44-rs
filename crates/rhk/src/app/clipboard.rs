@@ -129,11 +129,14 @@ fn get_raw_inner() -> Result<RawData, OsError> {
 		const BIT_OEMTEXT:     u8 = 0x20;
 		const BIT_UNICODETEXT: u8 = 0x40;
 		
+		// Note: FileExplorer places CF_TEXT before CF_UNICODETEXT and CF_OEMTEXT, with the size 4 times
+		// bigger than required. In the following match – it will be chosen over CF_UNICODETEXT.
+		// TODO: Always skip both CF_TEXT and CF_OEMTEXT in favor of CF_UNICODETEXT?
+		
 		match CLIPBOARD_FORMAT(fmt as u16) {
 			// GlobalSize() fails for CF_BITMAP, so we skip it and use CF_DIB or CF_DIBV5 instead.
 			// According to AutoHotkey's ClipboardAll() implementation, CF_ENHMETAFILE and CF_DSPENHMETAFILE
-			// fail as well, so we skip them too.
-			// https://github.com/AutoHotkey/AutoHotkey/blob/v2.0/source/var.cpp#L342
+			// fail as well, so we skip them too. https://github.com/AutoHotkey/AutoHotkey/blob/v2.0/source/var.cpp#L342
 			Ole::CF_BITMAP | Ole::CF_ENHMETAFILE | Ole::CF_DSPENHMETAFILE => continue,
 			
 			Ole::CF_DIB => if state & BIT_DIBV5 != 0 { continue; } else { state |= BIT_DIB; }
@@ -142,10 +145,15 @@ fn get_raw_inner() -> Result<RawData, OsError> {
 			Ole::CF_TEXT => if state & (BIT_OEMTEXT | BIT_UNICODETEXT) != 0 { continue; } else { state |= BIT_TEXT; }
 			Ole::CF_OEMTEXT => if state & (BIT_TEXT | BIT_UNICODETEXT) != 0 { continue; } else { state |= BIT_OEMTEXT; }
 			Ole::CF_UNICODETEXT => if state & (BIT_TEXT | BIT_OEMTEXT) != 0 { continue; } else { state |= BIT_UNICODETEXT; }
+			
+			// Text copied from FileExplorer's address bar has a custom format 0xC076 for which GetClipboardData()
+			// fails with ERROR_SUCCESS.
+			CLIPBOARD_FORMAT(0xC076) => continue,
 			_ => {}
 		}
 		
-		let g_mem = HGLOBAL(unsafe { GetClipboardData(fmt).context("failed to get clipboard data")?.0 });
+		let g_mem = HGLOBAL(unsafe {
+			GetClipboardData(fmt).with_context(|| format!("failed to get clipboard data (0x{fmt:X})"))?.0 });
 		
 		let size = unsafe { GlobalSize(g_mem) };
 		if size == 0 {
@@ -284,4 +292,66 @@ impl RawData {
 	pub fn is_empty(&self) -> bool { self.data.len() == 0 }
 	pub fn size(&self) -> usize { self.data.len() }
 	pub fn data(&self) -> &[u8] { &self.data }
+	
+	pub fn iter(&self) -> RawDataIter<'_> {
+		RawDataIter { data: &self.data, offset: self.is_empty() as usize }
+	}
+}
+
+impl<'a> IntoIterator for &'a RawData {
+	type Item = <Self::IntoIter as Iterator>::Item;
+	type IntoIter = RawDataIter<'a>;
+
+	fn into_iter(self) -> Self::IntoIter {
+		self.iter()
+	}
+}
+
+pub struct RawDataChunk<'a> {
+	fmt: u32,
+	size: u32,
+	data: &'a [u8],
+}
+
+impl fmt::Display for RawDataChunk<'_> {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "fmt: 0x{:X}; size: {}", self.fmt, self.size)
+	}
+}
+
+impl RawDataChunk<'_> {
+	pub fn fmt(&self) -> u32 { self.fmt }
+	pub fn size(&self) -> u32 { self.size }
+	pub fn data(&self) -> &[u8] { self.data }
+}
+
+pub struct RawDataIter<'a> {
+	offset: usize,
+	data: &'a Box<[u8]>
+}
+
+impl<'a> Iterator for RawDataIter<'a> {
+	type Item = RawDataChunk<'a>;
+
+	fn next(&mut self) -> Option<Self::Item> {
+		let mut offset = self.offset;
+		if offset == 1 {
+			return None;
+		}
+		
+		let fmt = u32::from_ne_bytes(self.data[offset..offset+4].try_into().unwrap());
+		if fmt == 0 {
+			self.offset = 1;
+			None
+		} else {
+			offset += 4;
+			let size = u32::from_ne_bytes(self.data[offset..offset+4].try_into().unwrap()) as usize;
+			offset += 4;
+			
+			let data = &self.data[offset..offset+size];
+			self.offset = offset + size;
+			
+			Some(RawDataChunk { fmt, size: size as u32, data })
+		}
+	}
 }
