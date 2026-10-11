@@ -6,7 +6,7 @@ use super::common::error::{Win32ErrResExt, Error, OK};
 use super::input::{handler::{self, Handler}, hotkey::Hotkey, mods::Mods, keys::Key, hotstr::Hotstr};
 use tray_icon::{IconBuilder, TrayIcon, IconEvent};
 use main_win::{MainWindow, OnMsgCallback, OnExitCallback, Icon};
-use std::{process, sync::{OnceLock, Mutex}};
+use std::{process, sync::{OnceLock, Mutex}, sync::atomic::{AtomicBool, Ordering}};
 use windows::core::{Owned, w};
 use windows::Win32::{
 	System::Threading::CreateMutexW,
@@ -17,6 +17,7 @@ use windows::Win32::{
 
 static ICON: OnceLock<Icon> = OnceLock::new();
 static WIN: OnceLock<MainWindow> = OnceLock::new();
+static IS_HOOKED: AtomicBool = AtomicBool::new(false);
 
 pub struct App {
 	h: Option<Handler>
@@ -85,7 +86,9 @@ impl App {
 	}
 	
 	pub fn run(mut self) -> ! {
+		IS_HOOKED.store(true, Ordering::Relaxed);
 		let (h_jh, h_thread_id) = self.h.take().unwrap().start(); // start keybd and mouse hooks
+		
 		get_win().wait();
 		
 		unsafe { PostThreadMessageW(h_thread_id, WM_QUIT, WPARAM(0), LPARAM(0)).unwrap(); }
@@ -177,11 +180,22 @@ fn set_panic_hook() {
 		let loc = info.location().unwrap();
 		
 		let text = format!(
-			"panic at {}:{}:{}: '{}'",
+			"panic at {}:{}:{}: {}",
 			loc.file(), loc.line(), loc.column(), info.payload_as_str().unwrap_or_default());
 		
-		// TODO: display with a window
-		println!("{text}");
+		if IS_HOOKED.load(Ordering::Relaxed) {
+			// TODO: log errors occurred while input-hooks are set and exit as quick as possible.
+			// Otherwise, if the panicking thread is a hook-thread, all input events will freeze
+			// until each event times out, or OS removes the hook.
+			println!("{text}");
+		} else {
+			let text = text
+				.encode_utf16()
+				.chain(std::iter::once(0))
+				.collect::<Box<[u16]>>();
+			
+			_ = unsafe { MessageBoxW(Some(hwnd()), windows_core::PCWSTR(text.as_ptr()), w!("Error"), MB_ICONERROR) };
+		}
 		
 		process::exit(0);
 	}));
@@ -191,8 +205,7 @@ fn ensure_singleton() {
 	unsafe {
 		let _mutex = CreateMutexW(None, false, w!("Global\\rhk_mtx")).expect("failed to create a named mutex");
 		if GetLastError() == ERROR_ALREADY_EXISTS {
-			_ = MessageBoxW(None, w!("Application is already running"), w!("Error"), MB_ICONERROR);
-			process::exit(0)
+			panic!("Application is already running");
 		}
 	}
 }

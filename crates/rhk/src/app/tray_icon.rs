@@ -6,7 +6,7 @@ use windows::Win32::{
 	Foundation::HWND,
 	UI::Shell::{NIM_ADD, NIM_MODIFY, NIM_DELETE, NIF_MESSAGE, NIF_STATE, NIF_ICON, NIF_TIP, NIS_HIDDEN,
 		NOTIFYICONDATAW, Shell_NotifyIconW, NOTIFY_ICON_DATA_FLAGS, NOTIFY_ICON_STATE},
-	UI::WindowsAndMessaging::{HICON, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, LoadImageW}};
+	UI::WindowsAndMessaging::{HICON, IMAGE_ICON, LR_LOADFROMFILE, LoadImageW}};
 
 type EventHandler = fn(&TrayIcon, IconEvent) -> Result<(), Error>;
 
@@ -179,7 +179,7 @@ impl IconBuilder {
 		Self { hwnd, msg, icons: Vec::new(), handler: None }
 	}
 	
-	pub fn add<P: AsRef<Path>>(mut self, tip: &'_ str, path: P) -> Result<Self, OsError> {
+	pub fn add<P: AsRef<Path>>(mut self, tip: &str, path: P) -> Result<Self, OsError> {
 		use std::iter::once;
 		
 		let path = path
@@ -193,8 +193,8 @@ impl IconBuilder {
 			None,
 			PCWSTR(path.as_ptr()),
 			IMAGE_ICON,
-			0, 0,
-			LR_LOADFROMFILE | LR_DEFAULTSIZE).context("failed to load icon image")?
+			16, 16,
+			LR_LOADFROMFILE).context("failed to load icon image")?
 		};
 		
 		let h_icon = unsafe { Owned::new(HICON(handle.0)) };

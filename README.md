@@ -1,13 +1,16 @@
 # i44-rs
 
 ## TODO
-- [ ] command runner
+- [ ] ui
+	- [ ] command runner
+	- [ ] mode display
+	- [ ] error messages
+- [ ] remove terminal once ui error-messages are implemented
 - [ ] produce better errors for make_input!() macro
-- [ ] :gd, :gt, :gdt hotstrs
+- [ ] hotstrs
 	- [ ] get date/time, format date/time
-- [ ] :@ hotstr (menu)
-- [ ] add process icon (winres crate)
-	- [ ] copy ./media to output dir (or embed them into the exe)
+	- [ ] :gd, :gt, :gdt hotstrs
+	- [ ] :@ hotstr (menu)
 - [ ] tests
 	- [ ] make_input! macro
-- [ ] 
+- [ ] define app context menu in .rc (https://learn.microsoft.com/en-us/windows/win32/menurc/menu-resource)
