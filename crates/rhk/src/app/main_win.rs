@@ -263,6 +263,14 @@ impl Icon {
 			todo!()
 		}
 	}
+	
+	pub fn update_tip(&self, index: usize, tip:  impl AsRef<str>) -> Result<(), OsError> {
+		if let Some(icon) = self.inner.upgrade() {
+			icon.update_tip(index, tip.as_ref())
+		} else {
+			todo!()
+		}
+	}
 }
 
 impl Drop for Icon {

@@ -1,12 +1,16 @@
-use std::{env, sync::{OnceLock, atomic::{AtomicBool, Ordering}}, process::Command, path::PathBuf};
+use std::{env, sync::{OnceLock, atomic::{AtomicBool, AtomicU8, Ordering}}, process::Command, path::PathBuf};
 use rhk::misc::audio::{self, Device, DeviceType, VolumeNotfEvent};
 use rhk::{common::error::{Error, OsError, OK}, tray_icon::{Icon, TrayIcon, IconEvent}};
 use super::sound;
 
 static MIC: OnceLock<Device> = OnceLock::new();
 static ICON: OnceLock<Icon> = OnceLock::new();
+static PATHS: OnceLock<[PathBuf; 2]> = OnceLock::new();
+
 static MUTED: AtomicBool = AtomicBool::new(false);
-static PATHS: OnceLock<Paths> = OnceLock::new();
+static VOLUME: AtomicU8 = AtomicU8::new(0);
+
+static MIC_DISP_NAME: &str = "FIFINE K670";
 
 #[derive(Debug)]
 struct Paths {
@@ -20,12 +24,14 @@ pub fn init() {
 	let mut mic = audio::default_device(DeviceType::Capture).expect("failed to get mic");
 	assert!(mic.name() == NAME, "wrong default mic");
 	
+	let vol = mic.get_volume().expect("failed to get mic volume") as u8;
+	
 	let mut dir = env::current_dir().expect("failed to get current dir");
 	dir.push("media");
 	
 	let icon = rhk::icon_builder()
-		.add("FIFINE K670", dir.join("greenMic.ico")).expect("failed to add green icon")
-		.add("FIFINE K670 (muted)", dir.join("redMic.ico")).expect("failed to add red icon")
+		.add(dir.join("greenMic.ico"), format!("{MIC_DISP_NAME} ({vol}%)")).expect("failed to add green icon")
+		.add(dir.join("redMic.ico"),   format!("{MIC_DISP_NAME} ({vol}%; muted)")).expect("failed to add red icon")
 		.handler(icon_handler)
 		.build()
 		.expect("failed to build icon");
@@ -39,10 +45,7 @@ pub fn init() {
 	mic.on_volume_update(volume_handler).expect("failed to add volume handler");
 	MIC.set(mic).expect("MIC should not be set");
 	
-	let paths = Paths {
-		mic_unmuted: dir.join("Windows Hardware Insert.wav"),
-		mic_muted: dir.join("Windows Hardware Fail.wav")
-	};
+	let paths = [ dir.join("Windows Hardware Insert.wav"), dir.join("Windows Hardware Fail.wav") ];
 	PATHS.set(paths).expect("Paths should not be set");
 }
 
@@ -58,7 +61,7 @@ fn get_icon() -> &'static Icon {
 	ICON.get().expect("ICON should be initialized")
 }
 
-fn get_paths() -> &'static Paths {
+fn get_paths() -> &'static [PathBuf; 2] {
 	PATHS.get().expect("Paths should be initialized")
 }
 
@@ -71,10 +74,21 @@ fn icon_handler(_: &TrayIcon, event: IconEvent) -> Result<(), Error> {
 }
 
 fn volume_handler(event: &VolumeNotfEvent) -> Result<(), Error> {
-	if MUTED.swap(event.muted, Ordering::Relaxed) != event.muted {
-		get_icon().display(event.muted as _)?;
-		let paths = get_paths();
-		sound::play_vol(if event.muted { &paths.mic_muted } else { &paths.mic_unmuted }, 50)?;
+	let icon = get_icon();
+	
+	let vol = event.vol;
+	let muted = event.muted;
+	
+	if VOLUME.swap(vol, Ordering::Relaxed) != vol {
+		icon.update_tip(0, format!("{MIC_DISP_NAME} ({vol}%)"))?;
+		icon.update_tip(1, format!("{MIC_DISP_NAME} ({vol}%; muted)"))?;
 	}
+	
+	if MUTED.swap(muted, Ordering::Relaxed) != muted {
+		let index = muted as usize;
+		icon.display(index)?;
+		sound::play_vol(&get_paths()[index], 50)?;
+	}
+	
 	OK
 }

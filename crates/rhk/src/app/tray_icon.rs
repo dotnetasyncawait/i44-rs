@@ -23,7 +23,7 @@ pub struct TrayIcon {
 }
 
 impl TrayIcon {
-	fn new(hwnd: HWND, msg: u32, icons: Vec<Item>, handler: Option<EventHandler>) -> Result<Self, OsError> {
+	fn new(hwnd: HWND, msg: u32, icons: Box<[Item]>, handler: Option<EventHandler>) -> Result<Self, OsError> {
 		static NEXT_ID: AtomicU32 = AtomicU32::new(0);
 		
 		let nid = NOTIFYICONDATAW {
@@ -54,6 +54,7 @@ impl TrayIcon {
 	pub fn show(&self) -> Result<(), OsError> { self.lock_inner().show() }
 	pub fn hide(&self) -> Result<(), OsError> { self.lock_inner().hide() }
 	pub fn toggle_visibility(&self) -> Result<bool, OsError> { self.lock_inner().toggle_visibility() }
+	pub fn update_tip(&self, index: usize, tip: &str) -> Result<(), OsError> { self.lock_inner().update_tip(index, tip) }
 	fn lock_inner(&self) -> MutexGuard<'_, Inner> { self.inner.lock().unwrap() }
 }
 
@@ -80,7 +81,7 @@ impl fmt::Debug for TrayIcon {
 }
 
 struct Item {
-	tip: Vec<u16>,
+	tip: Box<[u16]>,
 	h_icon: Owned<HICON>,
 }
 
@@ -88,7 +89,7 @@ struct Inner {
 	nid: NOTIFYICONDATAW,
 	index: usize,
 	visible: bool,
-	icons: Vec<Item>,
+	icons: Box<[Item]>,
 }
 
 impl Inner {
@@ -129,6 +130,22 @@ impl Inner {
 		self.notify(0, NIF_STATE, self.visible)?; // Index is ignored for NIF_STATE
 		self.visible ^= true;
 		Ok(self.visible)
+	}
+	
+	fn update_tip(&mut self, index: usize, tip: &str) -> Result<(), OsError> {
+		assert!(index < self.icons.len(), "invalid icon index");
+		
+		self.icons[index].tip = tip
+			.encode_utf16()
+			.take(127)
+			.chain(std::iter::once(0))
+			.collect();
+		
+		if index == self.index {
+			self.notify(index, NIF_TIP, false)
+		} else {
+			Ok(())
+		}
 	}
 	
 	fn notify(&mut self, index: usize, flags: NOTIFY_ICON_DATA_FLAGS, hide: bool) -> Result<(), OsError> {
@@ -179,7 +196,7 @@ impl IconBuilder {
 		Self { hwnd, msg, icons: Vec::new(), handler: None }
 	}
 	
-	pub fn add<P: AsRef<Path>>(mut self, tip: &str, path: P) -> Result<Self, OsError> {
+	pub fn add(mut self, path: impl AsRef<Path>, tip: impl AsRef<str>) -> Result<Self, OsError> {
 		use std::iter::once;
 		
 		let path = path
@@ -199,10 +216,11 @@ impl IconBuilder {
 		
 		let h_icon = unsafe { Owned::new(HICON(handle.0)) };
 		let tip = tip
+			.as_ref()
 			.encode_utf16()
 			.take(127)      // szTip member of NOTIFYICONDATAW is limited to 127 wide-characters + 1 NULL
 			.chain(once(0)) // 128-th character
-			.collect::<Vec<u16>>();
+			.collect::<Box<[u16]>>();
 		
 		self.icons.push(Item { tip, h_icon });
 		Ok(self)
@@ -214,6 +232,6 @@ impl IconBuilder {
 	}
 	
 	pub fn build(self) -> Result<TrayIcon, OsError> {
-		TrayIcon::new(self.hwnd, self.msg, self.icons, self.handler)
+		TrayIcon::new(self.hwnd, self.msg, self.icons.into_boxed_slice(), self.handler)
 	}
 }

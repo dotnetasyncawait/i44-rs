@@ -37,8 +37,8 @@ pub fn new() -> App {
 	dir.push("media");
 	
 	let icon = win.icon_builder()
-		.add("i44", dir.join("default.ico")).expect("failed to add 'default' icon")
-		.add("i44 (suspended)", dir.join("suspended.ico")).expect("failed to add 'suspended' icon")
+		.add(dir.join("default.ico"),   "rhk").expect("failed to add default icon")
+		.add(dir.join("suspended.ico"), "rhk (suspended)").expect("failed to add suspended icon")
 		.handler(icon_handler)
 		.build()
 		.expect("failed to build an icon");
