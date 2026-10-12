@@ -347,7 +347,7 @@ fn ms_wheel(key: Key, h: &mut Handler) -> bool {
 	let hotkey = match (hh.func)() {
 		Ok(hotkey) => hotkey,
 		Err(err) => {
-			display_err(entry, err);
+			display_err(format!("hotkey({entry}): {err}"));
 			return true;
 		}
 	};
@@ -427,7 +427,7 @@ fn ms_wheel(key: Key, h: &mut Handler) -> bool {
 			// Since actions on wheel keys are rare (not any for now), it should not be a problem.
 			queue_job(move || {
 				if let Err(err) = action(event) {
-					display_err(entry, err);
+					display_err(format!("action(hotkey({entry})): {err}"));
 				}
 				OK
 			});
@@ -436,7 +436,7 @@ fn ms_wheel(key: Key, h: &mut Handler) -> bool {
 		Hotkey::ActionRepeat(action) => {
 			queue_job(move || {
 				if let Err(err) = action() {
-					display_err(entry, err);
+					display_err(format!("action_r(hotkey({entry})): {err}"));
 				}
 				OK
 			});
@@ -758,7 +758,7 @@ fn kb_action(entry: KeyMods, action: fn(KeyEvent) -> Result<(), Error>, h: &mut 
 	
 	queue_job(move || {
 		if let Err(err) = action(event) {
-			display_err(entry, err);
+			display_err(format!("action(hotkey({entry})): {err}"));
 		}
 		OK
 	});
@@ -781,7 +781,7 @@ fn kb_action_r(entry: KeyMods, action: fn() -> Result<(), Error>, h: &mut Handle
 	queue_job(move || {
 		loop {
 			if let Err(err) = action() {
-				display_err(entry, err);
+				display_err(format!("action_r(hotkey({entry})): {err}"));
 				break;
 			}
 			if rx.recv().is_err() {
@@ -850,7 +850,7 @@ fn handle_hotstr(key: Key, h: &mut Handler) -> bool {
 			Ok(res) => res,
 			Err(err) => {
 				hotstr_erase(entry_len, h);
-				display_err(format!("{entry:?}"), err);
+				display_err(format!("hotstr({entry:?}): {err}"));
 				return true;
 			}
 		};
@@ -879,14 +879,14 @@ fn handle_hotstr(key: Key, h: &mut Handler) -> bool {
 			}
 			Hotstr::Clipb { r, clear, restore } => {
 				if let Err(err) = hotstr_clipb(r, clear, restore, entry_len, h) {
-					display_err(format!("Hotstr::Clipb({entry:?})"), err);
+					display_err(format!("clipb(hotstr({entry:?})): {err}"));
 				}
 			}
 			Hotstr::Action(action) => {
 				hotstr_erase(entry_len, h);
 				queue_job(move || {
 					if let Err(err) = action() {
-						display_err(format!("Hotstr::Action({entry:?})"), err);
+						display_err(format!("action(hotstr({entry:?})): {err}"));
 					}
 					OK
 				});
@@ -993,7 +993,7 @@ fn map_hotkey(f: fn() -> Result<Hotkey, Error>, entry: KeyMods, h: &mut Handler)
 			Hotkey::ActionRepeat(action) => kb_action_r(entry, action, h),
 		}
 		Err(err) => {
-			display_err(entry, err);
+			display_err(format!("hotkey({entry}): {err}"));
 			true
 		}
 	}
@@ -1154,13 +1154,13 @@ fn mask_remap(should_mask: bool, pr_mods: Mods, mods_up: &mut Mods, mods_down: &
 	}
 }
 
-fn display_err(entry: impl fmt::Display, err: Error) {
+fn display_err(msg: impl fmt::Display) {
 	// TODO: display with a window
-	println!("entry({entry}): {err}");
+	println!("{msg}");
 }
 
 fn queue_job(job: impl FnOnce() -> Result<(), Error> + Send + 'static) {
-	threadpool::queue_job(job).expect("failed to queue job")
+	threadpool::queue_job(job).expect("failed to queue job");
 }
 
 fn call_next(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {

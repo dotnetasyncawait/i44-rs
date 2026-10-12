@@ -19,28 +19,26 @@ pub enum ModeState {
 static MODE: OnceLock<RwLock<Mode>> = OnceLock::new();
 
 #[derive(Debug)]
-pub struct Mode {
+struct Mode {
 	state: ModeState
 }
 
-impl Mode {
-	pub fn get() -> ModeState {
-		match MODE.get() {
-			Some(mode) => mode.read().unwrap().state,
-			None => ModeState::None
-		}
+pub fn get() -> ModeState {
+	match MODE.get() {
+		Some(mode) => mode.read().unwrap().state,
+		None => ModeState::None
 	}
-	
-	pub fn set_none() {
-		if let Some(mode) = MODE.get() {
-			mode.write().unwrap().state = ModeState::None;
-		}
+}
+
+pub fn set_none() {
+	if let Some(mode) = MODE.get() {
+		mode.write().unwrap().state = ModeState::None;
 	}
-	
-	pub fn set_default() {
-		if let Some(mode) = MODE.get() {
-			mode.write().unwrap().state = ModeState::Normal;
-		}
+}
+
+pub fn set_default() {
+	if let Some(mode) = MODE.get() {
+		mode.write().unwrap().state = ModeState::Normal;
 	}
 }
 

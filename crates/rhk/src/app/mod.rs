@@ -2,11 +2,11 @@ pub(super) mod tray_icon;
 pub(super) mod main_win;
 pub mod clipboard;
 
-use super::common::error::{Win32ErrResExt, Error, OK};
+use super::common::error::{Win32ErrResExt, OsError, Error, OK};
 use super::input::{handler::{self, Handler}, hotkey::Hotkey, mods::Mods, keys::Key, hotstr::Hotstr};
 use tray_icon::{IconBuilder, TrayIcon, IconEvent};
 use main_win::{MainWindow, OnMsgCallback, OnExitCallback, Icon};
-use std::{process, sync::{OnceLock, Mutex}, sync::atomic::{AtomicBool, Ordering}};
+use std::{process, sync::{OnceLock, Mutex, mpsc}, sync::atomic::{AtomicBool, Ordering}};
 use windows::core::{Owned, w};
 use windows::Win32::{
 	System::Threading::CreateMutexW,
@@ -15,12 +15,15 @@ use windows::Win32::{
 		TPM_BOTTOMALIGN, TPM_RETURNCMD, PostThreadMessageW, SetForegroundWindow, WM_QUIT, MessageBoxW, MB_ICONERROR},
 	System::Com::{COINIT_MULTITHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx}};
 
+static ICON_SYNC: Mutex<()> = Mutex::new(());
 static ICON: OnceLock<Icon> = OnceLock::new();
 static WIN: OnceLock<MainWindow> = OnceLock::new();
 static IS_HOOKED: AtomicBool = AtomicBool::new(false);
+static SUSP_SENDER: OnceLock<mpsc::Sender<u8>> = OnceLock::new();
 
 pub struct App {
-	h: Option<Handler>
+	h: Option<Handler>,
+	susp_cbs: Vec<fn(bool, bool) -> Result<(), Error>>,
 }
 
 pub fn new() -> App {
@@ -47,7 +50,7 @@ pub fn new() -> App {
 	
 	crate::apps::explorer::init();
 	
-	App { h: Some(Handler::new()) }
+	App { h: Some(Handler::new()), susp_cbs: Vec::new() }
 }
 
 pub fn hwnd() -> HWND {
@@ -85,7 +88,14 @@ impl App {
 		self
 	}
 	
+	pub fn on_suspend(mut self, cb: fn(bool, bool) -> Result<(), Error>) -> Self {
+		self.susp_cbs.push(cb);
+		self
+	}
+	
 	pub fn run(mut self) -> ! {
+		init_on_suspend_callbacks(self.susp_cbs);
+		
 		IS_HOOKED.store(true, Ordering::Relaxed);
 		let (h_jh, h_thread_id) = self.h.take().unwrap().start(); // start keybd and mouse hooks
 		
@@ -103,25 +113,36 @@ pub fn exit() {
 	get_win().exit();
 }
 
-static STATE_SYNC: Mutex<()> = Mutex::new(());
-
-pub fn suspend(state: bool) {
-	let _g = STATE_SYNC.lock().unwrap();
+pub fn suspend(state: bool) -> Result<(), OsError> {
+	let _g = ICON_SYNC.lock().unwrap();
 	
 	handler::suspend(state);
 	if let Some(icon) = ICON.get() {
-		icon.display(state as _).unwrap();
+		icon.display(state as _)?;
 	}
+	if let Some(sender) = SUSP_SENDER.get() {
+		sender.send(((state as u8) << 1) | false as u8).unwrap();
+	}
+	
+	Ok(())
 }
 
-pub fn suspend_tgl() -> bool {
-	let _g = STATE_SYNC.lock().unwrap();
+pub fn suspend_tgl() -> Result<bool, OsError> {
+	suspend_tgl_inner(false)
+}
+
+fn suspend_tgl_inner(is_menu: bool) -> Result<bool, OsError> {
+	let _g = ICON_SYNC.lock().unwrap();
 	
 	let state = handler::suspend_tgl();
 	if let Some(icon) = ICON.get() {
-		icon.display(state as _).unwrap();
+		icon.display(state as _)?;
 	}
-	state
+	if let Some(sender) = SUSP_SENDER.get() {
+		sender.send(((state as u8) << 1) | is_menu as u8).unwrap();
+	}
+	
+	Ok(state)
 }
 
 pub fn icon_builder() -> IconBuilder {
@@ -162,17 +183,40 @@ fn icon_handler(icon: &TrayIcon, event: IconEvent) -> Result<(), Error> {
 		let mut point = POINT::default();
 		GetCursorPos(&mut point).context("failed to get cursor position")?;
 		
-		TrackPopupMenuEx(*menu, (TPM_BOTTOMALIGN | TPM_RETURNCMD).0, point.x, point.y, icon.hwnd(), None)
+		TrackPopupMenuEx(*menu, (TPM_BOTTOMALIGN | TPM_RETURNCMD).0, point.x, point.y, hwnd(), None)
 	};
 	
 	match res.0 {
 		0 => {}, // cancelled
-		SUSPEND => icon.display(handler::suspend_tgl() as _)?,
+		SUSPEND => _ = suspend_tgl_inner(true)?,
 		EXIT => exit(),
 		_ => unreachable!()
 	}
 	
 	OK
+}
+
+fn init_on_suspend_callbacks(cbs: Vec<fn(bool, bool) -> Result<(), Error>>) {
+	let (tx, rx) = mpsc::channel::<u8>();
+	
+	let _ = std::thread::spawn(move || {
+		for msg in rx {
+			let (state, is_menu) = ((msg & 2) != 0, (msg & 1) != 0);
+			
+			for cb in &cbs {
+				if let Err(err) = cb(state, is_menu) {
+					display_err(format!("on_suspend: {err}"));
+				}
+			}
+		}
+	});
+	
+	SUSP_SENDER.set(tx).expect("SUSP_SENDER should only be set once");
+}
+
+fn display_err(err: impl std::fmt::Display) {
+	// TODO: display with a window
+	println!("{err}");
 }
 
 fn set_panic_hook() {
@@ -185,8 +229,8 @@ fn set_panic_hook() {
 		
 		if IS_HOOKED.load(Ordering::Relaxed) {
 			// TODO: log errors occurred while input-hooks are set and exit as quick as possible.
-			// Otherwise, if the panicking thread is a hook-thread, all input events will freeze
-			// until each event times out, or OS removes the hook.
+			// Otherwise, if the panicking thread is a hook-thread, all the input events will freeze
+			// until each event times out, or OS finally removes the hook.
 			println!("{text}");
 		} else {
 			let text = text

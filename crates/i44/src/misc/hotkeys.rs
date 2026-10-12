@@ -3,7 +3,7 @@ use rhk::common::error::{Error, OK};
 use rhk::misc::win;
 use rhk::apps::*;
 use rhk::App;
-use super::{mode::{Mode, ModeState}, kb, mic};
+use super::{mode::{self, ModeState}, kb, mic};
 use crate::system::paths;
 
 type HotkeyResult = Result<Hotkey, Error>;
@@ -103,7 +103,7 @@ impl AppExt for App {
 }
 
 fn b() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::go_to_definition(),
 			discord::NAME => discord::nav_to_curr_call(),
@@ -114,7 +114,7 @@ fn b() -> HotkeyResult {
 }
 
 fn ls_b() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::go_to_impl(),
 			_ => Suppress
@@ -124,7 +124,7 @@ fn ls_b() -> HotkeyResult {
 }
 
 fn c() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			chrome::NAME => chrome::focus_on_addr_bar(),
 			explorer::NAME => explorer::focus_on_addr_bar(),
@@ -135,7 +135,7 @@ fn c() -> HotkeyResult {
 }
 
 fn ls_c() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::copy_line_down(),
 			wt::NAME => wt::duplicate_tab(),
@@ -146,7 +146,7 @@ fn ls_c() -> HotkeyResult {
 }
 
 fn ls_d() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			discord::NAME => discord::disconnect(),
 			_ => Suppress
@@ -162,14 +162,14 @@ fn lw_e() -> HotkeyResult {
 }
 
 fn g() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => Ok(Suppress),
 		_ => Ok(Default)
 	}
 }
 
 fn h() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::unfold(),
 			obsid::NAME => obsid::fold_less(),
@@ -180,7 +180,7 @@ fn h() -> HotkeyResult {
 }
 
 fn ls_h() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::unfold_all(),
 			obsid::NAME => obsid::unfold_all_headings_and_lists(),
@@ -191,7 +191,7 @@ fn ls_h() -> HotkeyResult {
 }
 
 fn k() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::goto_bracket(),
 			_ => Suppress
@@ -201,7 +201,7 @@ fn k() -> HotkeyResult {
 }
 
 fn lc_k() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::togg_breakpoint(),
 			_ => Default
@@ -211,7 +211,7 @@ fn lc_k() -> HotkeyResult {
 }
 
 fn l() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::show_or_focus_hover(),
 			chrome::NAME if chrome::is_youtube(win::title()?) => chrome::tgl_loop_mode(),
@@ -223,7 +223,7 @@ fn l() -> HotkeyResult {
 }
 
 fn p() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			obsid::NAME => obsid::togg_reading_view(),
 			chrome::NAME => chrome::reload_tab(),
@@ -234,7 +234,7 @@ fn p() -> HotkeyResult {
 }
 
 fn ls_p() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			chrome::NAME => chrome::reload_tab_ignore_cache(),
 			_ => Suppress
@@ -244,7 +244,7 @@ fn ls_p() -> HotkeyResult {
 }
 
 fn ls_s() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			discord::NAME => discord::upload_file(),
 			_ => Suppress
@@ -263,14 +263,14 @@ fn lcs_s() -> HotkeyResult {
 }
 
 fn v() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => Ok(Suppress),
 		_ => Ok(Default)
 	}
 }
 
 fn w() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::close_editor(),
 			chrome::NAME => chrome::close_tab(),
@@ -284,7 +284,7 @@ fn w() -> HotkeyResult {
 }
 
 fn ls_w() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::reopen_last_closed_tab(),
 			chrome::NAME => chrome::reopen_last_closed_tab(),
@@ -295,7 +295,7 @@ fn ls_w() -> HotkeyResult {
 }
 
 fn x() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::fold(),
 			obsid::NAME => obsid::fold_more(),
@@ -309,7 +309,7 @@ fn x() -> HotkeyResult {
 }
 
 fn ls_x() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::fold_all(),
 			obsid::NAME => obsid::fold_all_headings_and_lists(),
@@ -320,7 +320,7 @@ fn ls_x() -> HotkeyResult {
 }
 
 fn y() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::param_hints(),
 			chrome::NAME => chrome::open_home_page(),
@@ -331,7 +331,7 @@ fn y() -> HotkeyResult {
 }
 
 fn apstrph() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::comment_line(),
 			_ => Suppress
@@ -341,7 +341,7 @@ fn apstrph() -> HotkeyResult {
 }
 
 fn period() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::quick_fix(),
 			_ => Suppress
@@ -351,7 +351,7 @@ fn period() -> HotkeyResult {
 }
 
 fn rs_lbrace() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::NSymbol => match win::name()?.as_str() {
 			vscode::NAME => vscode::prev_member(),
 			chrome::NAME => chrome::decrease_playb_speed(),
@@ -362,7 +362,7 @@ fn rs_lbrace() -> HotkeyResult {
 }
 
 fn rs_rbrace() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::NSymbol => match win::name()?.as_str() {
 			vscode::NAME => vscode::next_member(),
 			chrome::NAME => chrome::increase_playb_speed(),
@@ -373,35 +373,35 @@ fn rs_rbrace() -> HotkeyResult {
 }
 
 fn ls_rs_lbrace() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::ISymbol => Unicode("«"),
 		_ => Default
 	}.ok()
 }
 
 fn ls_rs_rbrace() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::ISymbol => Unicode("»"),
 		_ => Default
 	}.ok()
 }
 
 fn ls_dash() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::ISymbol => Unicode(":="),
 		_ => Default
 	}.ok()
 }
 
 fn ls_bslash() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::ISymbol => Unicode("\\n"),
 		_ => Default
 	}.ok()
 }
 
 fn ls_rs_fslash() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::ISymbol => Unicode("—"),
 		_ => Default
 	}.ok()
@@ -417,7 +417,7 @@ fn lc_1() -> HotkeyResult {
 }
 
 fn ls_1() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::NSymbol => match win::name()?.as_str() {
 			vscode::NAME => vscode::copy_cursor_up(),
 			_ => Suppress
@@ -435,7 +435,7 @@ fn lc_2() -> HotkeyResult {
 }
 
 fn rs_2() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::NSymbol => match win::name()?.as_str() {
 			chrome::NAME => chrome::default_playb_speed(),
 			_ => Suppress
@@ -454,7 +454,7 @@ fn lc_3() -> HotkeyResult {
 }
 
 fn ls_3() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::NSymbol => match win::name()?.as_str() {
 			vscode::NAME => vscode::copy_cursor_down(),
 			_ => Suppress
@@ -486,21 +486,21 @@ fn lc_6() -> HotkeyResult {
 }
 
 fn ls_7() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::ISymbol => Unicode("–"),
 		_ => Default
 	}.ok()
 }
 
 fn ls_8() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::ISymbol => Unicode("->"),
 		_ => Default
 	}.ok()
 }
 
 fn ls_9() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::ISymbol => Unicode("=>"),
 		_ => Default
 	}.ok()
@@ -515,21 +515,21 @@ fn lc_0() -> HotkeyResult {
 }
 
 fn ls_up() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => { win::center_cursor()?; Remap(Mods::NONE, Key::WH_UP_X2) },
 		_ => Suppress
 	}.ok()
 }
 
 fn ls_down() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => { win::center_cursor()?; Remap(Mods::NONE, Key::WH_DOWN_X2) },
 		_ => Suppress
 	}.ok()
 }
 
 fn la_up() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::scroll_term_up_by_line(),
 			wt::NAME => wt::scroll_up(),
@@ -540,7 +540,7 @@ fn la_up() -> HotkeyResult {
 }
 
 fn la_down() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::scroll_term_down_by_line(),
 			wt::NAME => wt::scroll_down(),
@@ -551,7 +551,7 @@ fn la_down() -> HotkeyResult {
 }
 
 fn lcs_up() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => { win::center_cursor()?; vscode::scroll_up_fast() },
 			tg::NAME => { win::center_cursor()?; tg::scroll_page_up() },
@@ -562,7 +562,7 @@ fn lcs_up() -> HotkeyResult {
 }
 
 fn lcs_down() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => { win::center_cursor()?; vscode::scroll_down_fast() },
 			tg::NAME => { win::center_cursor()?; tg::scroll_page_down() },
@@ -573,7 +573,7 @@ fn lcs_down() -> HotkeyResult {
 }
 
 fn lsa_up() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::scroll_term_up_by_page(),
 			wt::NAME => wt::scroll_page_up(),
@@ -584,7 +584,7 @@ fn lsa_up() -> HotkeyResult {
 }
 
 fn lsa_down() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::scroll_term_down_by_page(),
 			wt::NAME => wt::scroll_page_down(),
@@ -595,21 +595,21 @@ fn lsa_down() -> HotkeyResult {
 }
 
 fn ls_rs_up() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Select => { win::center_cursor()?; Remap(Mods::NONE, Key::WH_UP_X2) },
 		_ => Suppress
 	}.ok()
 }
 
 fn ls_rs_down() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Select => { win::center_cursor()?; Remap(Mods::NONE, Key::WH_DOWN_X2) },
 		_ => Suppress
 	}.ok()
 }
 
 fn ls_left() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			obsid::NAME => obsid::find_prev(),
 			_ => Default
@@ -619,7 +619,7 @@ fn ls_left() -> HotkeyResult {
 }
 
 fn ls_right() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			obsid::NAME => obsid::find_next(),
 			_ => Default
@@ -629,7 +629,7 @@ fn ls_right() -> HotkeyResult {
 }
 
 fn lc_home() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::prev_tab(),
 			chrome::NAME => chrome::prev_tab(),
@@ -643,7 +643,7 @@ fn lc_home() -> HotkeyResult {
 }
 
 fn lc_end() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			vscode::NAME => vscode::next_tab(),
 			chrome::NAME => chrome::next_tab(),
@@ -657,7 +657,7 @@ fn lc_end() -> HotkeyResult {
 }
 
 fn ls_rs_home() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Select => match win::name()?.as_str() {
 			vscode::NAME => vscode::shrink_selection(),
 			_ => Default
@@ -667,7 +667,7 @@ fn ls_rs_home() -> HotkeyResult {
 }
 
 fn ls_rs_end() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Select => match win::name()?.as_str() {
 			vscode::NAME => vscode::expand_selection(),
 			_ => Default
@@ -677,35 +677,35 @@ fn ls_rs_end() -> HotkeyResult {
 }
 
 fn lc_rs_home() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Select => Suppress,
 		_ => Default
 	}.ok()
 }
 
 fn lc_rs_end() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Select => Suppress,
 		_ => Default
 	}.ok()
 }
 
 fn lc_pg_up() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => Remap(Mods::LC, Key::HOME), // move_cursor_to_file_beginning
 		_ => Default
 	}.ok()
 }
 
 fn lc_pg_down() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => Remap(Mods::LC, Key::END), // move_cursor_to_file_end
 		_ => Default
 	}.ok()
 }
 
 fn insert() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::NSymbol => match win::name()?.as_str() {
 			vscode::NAME => vscode::new_file(),
 			_ => Suppress
@@ -715,7 +715,7 @@ fn insert() -> HotkeyResult {
 }
 
 fn lc_enter() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Normal => match win::name()?.as_str() {
 			explorer::NAME => Action(|_| {
 				for path in explorer::selected_items()?.iter().take(5) {
@@ -753,7 +753,7 @@ fn ls_lbutton() -> HotkeyResult {
 }
 
 fn f3() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Mouse => match win::name()?.as_str() {
 			vscode::NAME => vscode::stop_debugger(),
 			_ => Suppress
@@ -763,7 +763,7 @@ fn f3() -> HotkeyResult {
 }
 
 fn f4() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Mouse => match win::name()?.as_str() {
 			vscode::NAME => vscode::restart_debugger(),
 			_ => Suppress
@@ -773,7 +773,7 @@ fn f4() -> HotkeyResult {
 }
 
 fn f6() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Mouse => match win::name()?.as_str() {
 			vscode::NAME => vscode::step_out(),
 			_ => Suppress
@@ -783,7 +783,7 @@ fn f6() -> HotkeyResult {
 }
 
 fn f7() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Mouse => match win::name()?.as_str() {
 			vscode::NAME => vscode::step_over(),
 			_ => Suppress
@@ -793,7 +793,7 @@ fn f7() -> HotkeyResult {
 }
 
 fn f8() -> HotkeyResult {
-	match Mode::get() {
+	match mode::get() {
 		ModeState::Mouse => match win::name()?.as_str() {
 			vscode::NAME => vscode::step_into(),
 			_ => Suppress
@@ -812,13 +812,7 @@ fn f23() -> HotkeyResult {
 }
 
 fn suspend() -> HotkeyResult {
-	if rhk::suspend_tgl() {
-		Mode::set_none();
-		kb::disable()?;
-	} else {
-		Mode::set_default();
-		kb::enable()?;
-	}
+	_ = rhk::suspend_tgl()?;
 	Ok(Suppress)
 }
 

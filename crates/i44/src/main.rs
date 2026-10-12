@@ -12,7 +12,8 @@ fn main() {
 		.add_hotkeys()
 		.add_hotstrs()
 		.on_message(WM_POWERBROADCAST, default_kb)
-		.on_exit(|| { _ = kb::disable(); false });
+		.on_suspend(toggle_kb)
+		.on_exit(disable_kb);
 	
 	sound::init();
 	mode::init();
@@ -30,4 +31,20 @@ fn default_kb(_: HWND, _: u32, wparam: WPARAM, _: LPARAM) -> Result<Option<isize
 			.and_then(|_| kb.write(&[HID_DEFAULT]))?;
 	}
 	Ok(None)
+}
+
+fn toggle_kb(suspended: bool, _: bool) -> Result<(), Error> {
+	if suspended {
+		mode::set_none();
+		kb::disable()?;
+	} else {
+		mode::set_default();
+		kb::enable()?;
+	}
+	Ok(())
+}
+
+fn disable_kb() -> bool {
+	_ = kb::disable();
+	false
 }
