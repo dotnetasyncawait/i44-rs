@@ -1,11 +1,11 @@
-pub(super) mod tray_icon;
 pub(super) mod main_win;
+pub mod tray_icon;
 pub mod clipboard;
 
 use super::common::error::{Win32ErrResExt, OsError, Error, OK};
 use super::input::{handler::{self, Handler}, hotkey::Hotkey, mods::Mods, keys::Key, hotstr::Hotstr};
 use tray_icon::{IconBuilder, TrayIcon, IconEvent};
-use main_win::{MainWindow, OnMsgCallback, OnExitCallback, Icon};
+use main_win::{MainWindow, OnMsgCallback, OnExitCallback};
 use std::{process, sync::{OnceLock, Mutex, mpsc}, sync::atomic::{AtomicBool, Ordering}};
 use windows::core::{Owned, w};
 use windows::Win32::{
@@ -16,7 +16,7 @@ use windows::Win32::{
 	System::Com::{COINIT_MULTITHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx}};
 
 static ICON_SYNC: Mutex<()> = Mutex::new(());
-static ICON: OnceLock<Icon> = OnceLock::new();
+static ICON: OnceLock<TrayIcon> = OnceLock::new();
 static WIN: OnceLock<MainWindow> = OnceLock::new();
 static IS_HOOKED: AtomicBool = AtomicBool::new(false);
 static SUSP_SENDER: OnceLock<mpsc::Sender<u8>> = OnceLock::new();
@@ -41,10 +41,10 @@ pub fn new() -> App {
 		.add(dir.join("suspended.ico"), "rhk (suspended)").expect("failed to add suspended icon")
 		.handler(icon_handler)
 		.build()
-		.expect("failed to build an icon");
+		.expect("failed to build app icon");
 	
 	icon.display(handler::is_suspended() as _).unwrap();
-	ICON.set(win.add_icon(icon)).expect("icon should not be set");
+	ICON.set(icon).expect("icon should not be set");
 	
 	WIN.set(win).expect("WIN should not be set");
 	
@@ -147,10 +147,6 @@ fn suspend_tgl_inner(is_menu: bool) -> Result<bool, OsError> {
 
 pub fn icon_builder() -> IconBuilder {
 	get_win().icon_builder()
-}
-
-pub fn add_icon(icon: TrayIcon) -> Icon {
-	get_win().add_icon(icon)
 }
 
 fn get_win() -> &'static MainWindow {

@@ -1,10 +1,10 @@
 use std::{env, sync::{OnceLock, atomic::{AtomicBool, AtomicU8, Ordering}}, process::Command, path::PathBuf};
 use rhk::misc::audio::{self, Device, DeviceType, VolumeNotfEvent};
-use rhk::{common::error::{Error, OsError, OK}, tray_icon::{Icon, TrayIcon, IconEvent}};
+use rhk::{common::error::{Error, OsError, OK}, tray_icon::{TrayIcon, IconEvent}};
 use super::sound;
 
 static MIC: OnceLock<Device> = OnceLock::new();
-static ICON: OnceLock<Icon> = OnceLock::new();
+static ICON: OnceLock<TrayIcon> = OnceLock::new();
 static PATHS: OnceLock<[PathBuf; 2]> = OnceLock::new();
 
 static MUTED: AtomicBool = AtomicBool::new(false);
@@ -31,16 +31,16 @@ pub fn init() {
 	
 	let icon = rhk::icon_builder()
 		.add(dir.join("greenMic.ico"), format!("{MIC_DISP_NAME} ({vol}%)")).expect("failed to add green icon")
-		.add(dir.join("redMic.ico"),   format!("{MIC_DISP_NAME} ({vol}%; muted)")).expect("failed to add red icon")
+		.add(dir.join("redMic.ico"),   format!("{MIC_DISP_NAME} ({vol}%) 🔇")).expect("failed to add red icon")
 		.handler(icon_handler)
 		.build()
-		.expect("failed to build icon");
+		.expect("failed to build mic icon");
 	
 	let muted = mic.get_mute().unwrap();
 	icon.display(muted as _).expect("failed to display icon");
 	
 	MUTED.store(muted, Ordering::Relaxed);
-	ICON.set(rhk::add_icon(icon)).expect("ICON should not be set");
+	ICON.set(icon).expect("ICON should not be set");
 	
 	mic.on_volume_update(volume_handler).expect("failed to add volume handler");
 	MIC.set(mic).expect("MIC should not be set");
@@ -57,7 +57,7 @@ fn get_mic() -> &'static Device {
 	MIC.get().expect("MIC should be initialized")
 }
 
-fn get_icon() -> &'static Icon {
+fn get_icon() -> &'static TrayIcon {
 	ICON.get().expect("ICON should be initialized")
 }
 
@@ -81,7 +81,7 @@ fn volume_handler(event: &VolumeNotfEvent) -> Result<(), Error> {
 	
 	if VOLUME.swap(vol, Ordering::Relaxed) != vol {
 		icon.update_tip(0, format!("{MIC_DISP_NAME} ({vol}%)"))?;
-		icon.update_tip(1, format!("{MIC_DISP_NAME} ({vol}%; muted)"))?;
+		icon.update_tip(1, format!("{MIC_DISP_NAME} ({vol}%) 🔇"))?;
 	}
 	
 	if MUTED.swap(muted, Ordering::Relaxed) != muted {

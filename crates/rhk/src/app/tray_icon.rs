@@ -1,6 +1,7 @@
 use std::{fmt, os::windows::ffi::OsStrExt, path::Path};
-use std::sync::{Mutex, MutexGuard, TryLockError, atomic::{AtomicU32, Ordering}};
+use std::sync::{Arc, Weak, Mutex, MutexGuard, atomic::{AtomicU32, Ordering}};
 use crate::common::error::{OsError, Win32ErrResExt, Error};
+use super::main_win::{self, State as WinState};
 use windows::core::{Owned, PCWSTR};
 use windows::Win32::{
 	Foundation::HWND,
@@ -17,21 +18,28 @@ pub enum IconEvent {
 	DClick,
 }
 
+#[derive(Debug)]
 pub struct TrayIcon {
-	inner: Mutex<Inner>,
+	state: Arc<State>,
 	pub(super) handler: Option<EventHandler>
 }
 
 impl TrayIcon {
-	fn new(hwnd: HWND, msg: u32, icons: Box<[Item]>, handler: Option<EventHandler>) -> Result<Self, OsError> {
+	fn new(
+		hwnd: HWND,
+		icons: Box<[Item]>,
+		handler: Option<EventHandler>,
+		win_state: Weak<WinState>) -> Result<Self, OsError>
+	{
 		static NEXT_ID: AtomicU32 = AtomicU32::new(0);
+		let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 		
 		let nid = NOTIFYICONDATAW {
 			cbSize: size_of::<NOTIFYICONDATAW>() as _,
 			hWnd: hwnd,
-			uID: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+			uID: id,
 			uFlags: NIF_MESSAGE | NIF_STATE,
-			uCallbackMessage: msg,
+			uCallbackMessage: main_win::WM_ICON_MSG,
 			dwState: NIS_HIDDEN,
 			dwStateMask: NIS_HIDDEN,
 			..Default::default()
@@ -39,46 +47,51 @@ impl TrayIcon {
 		
 		unsafe { Shell_NotifyIconW(NIM_ADD, &nid).ok().context("failed to create icon")?; }
 		
+		let handler = Some(handler.unwrap_or(|_, _| Ok(())));
 		let inner = Mutex::new(Inner { nid, icons, index: usize::MAX, visible: false });
-		Ok(TrayIcon { inner, handler })
+		let state = Arc::new(State { id, hwnd, inner, win_state });
+		
+		Ok(TrayIcon { state, handler })
 	}
 	
-	// Note: 'id' and 'hwnd' are read-only fields, and they don't really need a lock. 'id' is read
-	// only once (on adding TrayIcon to a window), while owning the instance, so no lock contention.
-	// 'hwnd', as an example, can be called each time on creating a context menu (might consider making
-	// a separate field).
+	fn new_outer(s: &Self) -> Self {
+		TrayIcon { state: Arc::clone(&s.state), handler: None }
+	}
 	
-	pub fn id(&self) -> u32 { self.lock_inner().id() }
-	pub fn hwnd(&self) -> HWND { self.lock_inner().hwnd() }
-	pub fn display(&self, index: usize) -> Result<(), OsError> { self.lock_inner().display(index) }
-	pub fn show(&self) -> Result<(), OsError> { self.lock_inner().show() }
-	pub fn hide(&self) -> Result<(), OsError> { self.lock_inner().hide() }
-	pub fn toggle_visibility(&self) -> Result<bool, OsError> { self.lock_inner().toggle_visibility() }
-	pub fn update_tip(&self, index: usize, tip: &str) -> Result<(), OsError> { self.lock_inner().update_tip(index, tip) }
-	fn lock_inner(&self) -> MutexGuard<'_, Inner> { self.inner.lock().unwrap() }
+	pub fn id(&self) -> u32 { self.state.id }
+	pub fn hwnd(&self) -> HWND { self.state.hwnd }
+	pub fn display(&self, index: usize) -> Result<(), OsError> { self.lock().display(index) }
+	pub fn show(&self) -> Result<(), OsError> { self.lock().show() }
+	pub fn hide(&self) -> Result<(), OsError> { self.lock().hide() }
+	pub fn toggle_visibility(&self) -> Result<bool, OsError> { self.lock().toggle_visibility() }
+	pub fn update_tip(&self, index: usize, tip: impl AsRef<str>) -> Result<(), OsError> {
+		self.lock().update_tip(index, tip.as_ref())
+	}
+	
+	fn lock(&self) -> MutexGuard<'_, Inner> { self.state.inner.lock().unwrap() }
 }
 
 impl Drop for TrayIcon {
 	fn drop(&mut self) {
-		unsafe { Shell_NotifyIconW(NIM_DELETE, &self.lock_inner().nid).expect("failed to delete icon"); }
+		if self.handler.is_some() {
+			unsafe { Shell_NotifyIconW(NIM_DELETE, &self.lock().nid).expect("failed to delete icon"); }
+		} else if let Some(state) = self.state.win_state.upgrade() {
+			state.icons.lock().unwrap().remove(&self.id()).expect("icon should be present");
+		}
 	}
 }
 
-impl fmt::Debug for TrayIcon {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		let mut d = f.debug_struct("TrayIcon");
-		
-		match self.inner.try_lock() {
-			Ok(inner) => d.field("inner", &inner),
-			Err(err) => match err {
-				TryLockError::Poisoned(_) => d.field("inner", &"<poisoned>"),
-				TryLockError::WouldBlock => d.field("inner", &"<locked>"),
-			},
-		};
-		
-		d.finish()
-	}
+#[derive(Debug)]
+struct State {
+	id: u32,
+	hwnd: HWND,
+	inner: Mutex<Inner>,
+	win_state: Weak<WinState>,
 }
+
+// SAFETY: due to Self::hwnd and Self::inner.nid
+unsafe impl Send for State {}
+unsafe impl Sync for State {}
 
 struct Item {
 	tip: Box<[u16]>,
@@ -93,9 +106,6 @@ struct Inner {
 }
 
 impl Inner {
-	fn id(&self) -> u32 { self.nid.uID }
-	fn hwnd(&self) -> HWND { self.nid.hWnd }
-	
 	fn display(&mut self, index: usize) -> Result<(), OsError> {
 		assert!(index < self.icons.len(), "invalid icon index");
 		
@@ -135,11 +145,7 @@ impl Inner {
 	fn update_tip(&mut self, index: usize, tip: &str) -> Result<(), OsError> {
 		assert!(index < self.icons.len(), "invalid icon index");
 		
-		self.icons[index].tip = tip
-			.encode_utf16()
-			.take(127)
-			.chain(std::iter::once(0))
-			.collect();
+		self.icons[index].tip = encode_tip(tip);
 		
 		if index == self.index {
 			self.notify(index, NIF_TIP, false)
@@ -182,18 +188,16 @@ impl fmt::Debug for Inner {
 	}
 }
 
-unsafe impl Send for Inner {}
-
 pub struct IconBuilder {
 	hwnd: HWND,
-	msg: u32,
 	icons: Vec<Item>,
 	handler: Option<EventHandler>,
+	win_state: Weak<WinState>,
 }
 
 impl IconBuilder {
-	pub fn new(hwnd: HWND, msg: u32) -> Self {
-		Self { hwnd, msg, icons: Vec::new(), handler: None }
+	pub(super) fn new(hwnd: HWND, win_state: Weak<WinState>) -> Self {
+		Self { hwnd, icons: Vec::new(), handler: None, win_state }
 	}
 	
 	pub fn add(mut self, path: impl AsRef<Path>, tip: impl AsRef<str>) -> Result<Self, OsError> {
@@ -214,15 +218,9 @@ impl IconBuilder {
 			LR_LOADFROMFILE).context("failed to load icon image")?
 		};
 		
-		let h_icon = unsafe { Owned::new(HICON(handle.0)) };
-		let tip = tip
-			.as_ref()
-			.encode_utf16()
-			.take(127)      // szTip member of NOTIFYICONDATAW is limited to 127 wide-characters + 1 NULL
-			.chain(once(0)) // 128-th character
-			.collect::<Box<[u16]>>();
+		let item = Item { tip: encode_tip(tip.as_ref()), h_icon: unsafe { Owned::new(HICON(handle.0)) } };
+		self.icons.push(item);
 		
-		self.icons.push(Item { tip, h_icon });
 		Ok(self)
 	}
 	
@@ -232,6 +230,27 @@ impl IconBuilder {
 	}
 	
 	pub fn build(self) -> Result<TrayIcon, OsError> {
-		TrayIcon::new(self.hwnd, self.msg, self.icons.into_boxed_slice(), self.handler)
+		let Some(win_state) = self.win_state.upgrade() else {
+			// The app is being shut down, so it makes no difference what error is returned.
+			// Nonetheless, add some diagnostic value if we happen to see the error.
+			return Err(OsError::from_hr("IconBuilder::build()", windows_core::HRESULT(0)))
+		};
+		
+		let icon = TrayIcon::new(self.hwnd, self.icons.into_boxed_slice(), self.handler, self.win_state)?;
+		let icon_outer = TrayIcon::new_outer(&icon);
+		let id = icon.id();
+		
+		let inserted = win_state.icons.lock().unwrap().insert(id, icon).is_none();
+		assert!(inserted, "duplicate icon with id: {id}");
+		
+		Ok(icon_outer)
 	}
+}
+
+fn encode_tip(tip: &str) -> Box<[u16]> {
+	tip
+		.encode_utf16()
+		.take(127) // szTip member of NOTIFYICONDATAW is limited to 127 wide-characters + 1 NULL
+		.chain(std::iter::once(0)) // 128-th NULL-character
+		.collect()
 }

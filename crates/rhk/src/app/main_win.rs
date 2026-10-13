@@ -1,7 +1,7 @@
 use std::{cell::RefCell, ffi::c_void, sync::{Arc, Mutex, Weak, mpsc}, fmt};
 use std::{thread::{self, JoinHandle}, collections::{HashMap, hash_map::Entry}};
 use super::tray_icon::{TrayIcon, IconBuilder, IconEvent};
-use crate::common::error::{Error, OsError};
+use crate::common::error::{Error};
 use windows::core::w;
 use windows::Win32::{
 	Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
@@ -14,12 +14,12 @@ use windows::Win32::{
 pub type OnMsgCallback = fn(HWND, u32, WPARAM, LPARAM) -> Result<Option<isize>, Error>;
 pub type OnExitCallback = fn() -> bool;
 
-const WM_ICON_MSG: u32 = WM_USER | 0xFF;
+pub(crate) const WM_ICON_MSG: u32 = WM_USER | 0xFF;
 
 pub struct State {
 	on_msg_cbs: Mutex<HashMap<u32, Vec<OnMsgCallback>>>,
 	on_exit_cbs: Mutex<Vec<OnExitCallback>>,
-	icons: Mutex<HashMap<u32, Arc<TrayIcon>>>,
+	pub(super) icons: Mutex<HashMap<u32, TrayIcon>>,
 }
 
 impl State {
@@ -71,21 +71,7 @@ impl MainWindow {
 	}
 	
 	pub fn icon_builder(&self) -> IconBuilder {
-		IconBuilder::new(self.hwnd, WM_ICON_MSG)
-	}
-	
-	pub fn add_icon(&self, icon: TrayIcon) -> Icon {
-		let state = self.state.upgrade().expect("TODO");
-		let id = icon.id();
-		
-		let icon = Arc::new(icon);
-		let weak_icon = Arc::downgrade(&icon);
-		
-		if state.icons.lock().unwrap().insert(id, icon).is_some() {
-			panic!("Duplicate icon with id: {id}")
-		}
-		
-		Icon { id, state: Arc::downgrade(&state), inner: weak_icon }
+		IconBuilder::new(self.hwnd, self.state.clone())
 	}
 	
 	pub fn wait(&self) {
@@ -172,7 +158,21 @@ unsafe extern "system" fn win_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 				}
 			}
 			drop(exit_cbs);
-			_ = unsafe { Arc::from_raw(r_state) };
+			
+			let mut state = unsafe { Arc::from_raw(r_state) };
+			let mut freed = false;
+			
+			// There might be tray icon creation/deletion holding an upgraded, strong reference to the state.
+			// Might want to add better synchronization primitive instead of busy-wait.
+			for _ in 0..100_000 {
+				match Arc::try_unwrap(state) {
+					Ok(_) => { freed = true; break }
+					Err(s) => state = s
+				}
+				std::hint::spin_loop();
+			}
+			
+			assert!(freed, "failed to free the state");
 			unsafe { DestroyWindow(hwnd).unwrap() };
 		}
 		WM_DESTROY => unsafe { PostQuitMessage(0); },
@@ -199,7 +199,7 @@ unsafe extern "system" fn win_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 				&& let Some(cb) = icon.handler
 				&& let Err(err) = cb(icon, event)
 			{
-				display_err(format!("icon_handler({icon_id})"), err);
+				display_err(format!("icon_handler({icon_id}): {err}"));
 			}
 		}
 		_ => {
@@ -208,7 +208,7 @@ unsafe extern "system" fn win_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 				for (i, cb) in msg_cbs.into_iter().enumerate() {
 					match cb(hwnd, msg, wparam, lparam) {
 						Ok(res) => if let Some(value) = res { return LRESULT(value); }
-						Err(err) => display_err(format!("on_message([{}] 0x{msg:X})", i+1), err)
+						Err(err) => display_err(format!("on_message([{i}] 0x{msg:X}): {err}"))
 					}
 				}
 			}
@@ -224,64 +224,7 @@ unsafe extern "system" fn win_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 	}
 }
 
-#[derive(Debug)]
-pub struct Icon {
-	id: u32,
-	state: Weak<State>,
-	inner: Weak<TrayIcon>,
-}
-
-impl Icon {
-	pub fn display(&self, index: usize) -> Result<(), OsError> {
-		if let Some(icon) = self.inner.upgrade() {
-			icon.display(index)
-		} else {
-			todo!()
-		}
-	}
-	
-	pub fn show(&self) -> Result<(), OsError> {
-		if let Some(icon) = self.inner.upgrade() {
-			icon.show()
-		} else {
-			todo!()
-		}
-	}
-	
-	pub fn hide(&self) -> Result<(), OsError> {
-		if let Some(icon) = self.inner.upgrade() {
-			icon.hide()
-		} else {
-			todo!()
-		}
-	}
-	
-	pub fn toggle_visibility(&self) -> Result<bool, OsError> {
-		if let Some(icon) = self.inner.upgrade() {
-			icon.toggle_visibility()
-		} else {
-			todo!()
-		}
-	}
-	
-	pub fn update_tip(&self, index: usize, tip:  impl AsRef<str>) -> Result<(), OsError> {
-		if let Some(icon) = self.inner.upgrade() {
-			icon.update_tip(index, tip.as_ref())
-		} else {
-			todo!()
-		}
-	}
-}
-
-impl Drop for Icon {
-	fn drop(&mut self) {
-		if let Some(state) = self.state.upgrade() {
-			state.icons.lock().unwrap().remove(&self.id).expect("Icon must be present");
-		}
-	}
-}
-
-fn display_err(from: impl fmt::Display, err: impl fmt::Display) {
+fn display_err(msg: impl fmt::Display) {
 	// TODO: display with a window
-	println!("{from}: {err}");
+	println!("{msg}");
 }
